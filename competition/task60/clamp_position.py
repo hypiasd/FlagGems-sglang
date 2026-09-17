@@ -19,6 +19,8 @@ vendor paths in this file and dispatch from the tensor device so a later
 vendor-specific definition cannot shadow an earlier one.
 """
 
+import os
+
 import torch
 import triton
 import triton.language as tl
@@ -144,10 +146,24 @@ def clamp_position(seq_lens: torch.Tensor) -> torch.Tensor:
     if n_elements == 0:
         return out
 
-    block = min(1024, triton.next_power_of_2(n_elements))
+    # Match the official pointwise backend limits only when the runner tells
+    # us the vendor explicitly. Keep the v5/v10 fallback for other runners,
+    # because several CUDA-compatible devices share the same torch device
+    # type and cannot be identified safely from ``device.type`` alone.
+    vendor = os.environ.get("DNN_VENDOR", "").lower()
+    if vendor in ("metax", "hygon"):
+        max_block = 2048
+    elif vendor == "tsingmicro":
+        max_block = 4096
+    else:
+        max_block = 1024
+
+    block = min(max_block, triton.next_power_of_2(n_elements))
     grid = (triton.cdiv(n_elements, block),)
 
-    if block <= 32:
+    if vendor == "tsingmicro":
+        num_warps = 1
+    elif block <= 32:
         num_warps = 1
     elif block <= 128:
         num_warps = 2
