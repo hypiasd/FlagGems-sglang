@@ -93,10 +93,13 @@ def _clamp_position_i32_kernel(
 def clamp_position(seq_lens: torch.Tensor) -> torch.Tensor:
     """Return ``(seq_lens - 1).clamp(min=0)`` with the same dtype and shape."""
     device_type = seq_lens.device.type
+    vendor = os.environ.get("DNN_VENDOR", "").lower()
 
     # Torch-FL exposes Enflame as ``gcu``. Its Triton lowering is much faster
     # when int64 sequence lengths are bridged through an int32 work buffer.
-    if device_type == "gcu":
+    # The official runner identifies the same backend with DNN_VENDOR, while
+    # the standalone archive may expose it as a CUDA-compatible device type.
+    if device_type == "gcu" or vendor == "enflame":
         original_dtype = seq_lens.dtype
         work = (
             seq_lens.to(torch.int32)
@@ -134,7 +137,7 @@ def clamp_position(seq_lens: torch.Tensor) -> torch.Tensor:
 
     # Torch-NPU exposes Ascend as ``npu`` in the normal runtime. Keep the
     # private-use spelling as a compatibility fallback for older adapters.
-    if device_type == "npu" or (
+    if vendor == "ascend" or device_type == "npu" or (
         device_type == "privateuseone" and hasattr(torch, "npu")
     ):
         # The subtraction already creates a fresh tensor. Clamping that
@@ -150,7 +153,6 @@ def clamp_position(seq_lens: torch.Tensor) -> torch.Tensor:
     # us the vendor explicitly. Keep the v5/v10 fallback for other runners,
     # because several CUDA-compatible devices share the same torch device
     # type and cannot be identified safely from ``device.type`` alone.
-    vendor = os.environ.get("DNN_VENDOR", "").lower()
     if vendor in ("metax", "hygon"):
         max_block = 2048
     elif vendor == "tsingmicro":
