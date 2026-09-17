@@ -164,12 +164,11 @@ def clamp_position(seq_lens: torch.Tensor) -> torch.Tensor:
     block = min(max_block, triton.next_power_of_2(n_elements))
     grid = (triton.cdiv(n_elements, block),)
 
-    if vendor == "tsingmicro":
+    # Small pointwise tiles have no reduction or inter-warp communication.
+    # Try one warp through 256 elements; retain the large-tile configuration
+    # so the online comparison isolates the small-input launch policy.
+    if vendor == "tsingmicro" or block <= 256:
         num_warps = 1
-    elif block <= 32:
-        num_warps = 1
-    elif block <= 128:
-        num_warps = 2
     else:
         num_warps = 4
 
