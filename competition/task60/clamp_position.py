@@ -97,9 +97,10 @@ def clamp_position(seq_lens: torch.Tensor) -> torch.Tensor:
 
     # Torch-FL exposes Enflame as ``gcu``. Its Triton lowering is much faster
     # when int64 sequence lengths are bridged through an int32 work buffer.
-    # The official runner identifies the same backend with DNN_VENDOR, while
-    # the standalone archive may expose it as a CUDA-compatible device type.
-    if device_type == "gcu" or vendor == "enflame":
+    # Keep this dispatch tied to the actual tensor device; vendor-only
+    # dispatch is intentionally avoided because the historical Enflame score
+    # used for comparison was identified as invalid.
+    if device_type == "gcu":
         original_dtype = seq_lens.dtype
         work = (
             seq_lens.to(torch.int32)
