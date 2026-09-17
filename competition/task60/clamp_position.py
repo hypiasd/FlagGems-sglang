@@ -25,7 +25,29 @@ import triton.language as tl
 
 
 @triton.jit
-def _clamp_position_kernel(
+def _clamp_position_contiguous_kernel(
+    seq_lens_ptr,
+    out_ptr,
+    n_elements,
+    BLOCK: tl.constexpr,
+):
+    pid = tl.program_id(0)
+    offsets = pid * BLOCK + tl.arange(0, BLOCK)
+    mask = offsets < n_elements
+
+    seq_lens = tl.load(
+        seq_lens_ptr + offsets,
+        mask=mask,
+        other=0,
+    )
+    # Spell out the clamp instead of using tl.maximum: the latter currently
+    # fails lowering for integer blocks on some Triton-TLE backends.
+    positions = tl.where(seq_lens > 0, seq_lens - 1, 0)
+    tl.store(out_ptr + offsets, positions, mask=mask)
+
+
+@triton.jit
+def _clamp_position_strided_kernel(
     seq_lens_ptr,
     out_ptr,
     n_elements,
@@ -36,14 +58,11 @@ def _clamp_position_kernel(
     pid = tl.program_id(0)
     offsets = pid * BLOCK + tl.arange(0, BLOCK)
     mask = offsets < n_elements
-
     seq_lens = tl.load(
         seq_lens_ptr + offsets * input_stride,
         mask=mask,
         other=0,
     )
-    # Spell out the clamp instead of using tl.maximum: the latter currently
-    # fails lowering for integer blocks on some Triton-TLE backends.
     positions = tl.where(seq_lens > 0, seq_lens - 1, 0)
     tl.store(out_ptr + offsets * output_stride, positions, mask=mask)
 
@@ -116,7 +135,9 @@ def clamp_position(seq_lens: torch.Tensor) -> torch.Tensor:
     if device_type == "npu" or (
         device_type == "privateuseone" and hasattr(torch, "npu")
     ):
-        return torch.clamp_min(seq_lens - 1, 0)
+        # The subtraction already creates a fresh tensor. Clamping that
+        # temporary in place avoids a second allocation on the NPU path.
+        return (seq_lens - 1).clamp_min_(0)
 
     n_elements = seq_lens.numel()
     out = torch.empty_like(seq_lens, memory_format=torch.contiguous_format)
@@ -133,16 +154,26 @@ def clamp_position(seq_lens: torch.Tensor) -> torch.Tensor:
     else:
         num_warps = 4
 
-    _clamp_position_kernel[grid](
-        seq_lens,
-        out,
-        n_elements,
-        seq_lens.stride(0),
-        out.stride(0),
-        BLOCK=block,
-        num_warps=num_warps,
-        num_stages=1,
-    )
+    if seq_lens.is_contiguous():
+        _clamp_position_contiguous_kernel[grid](
+            seq_lens,
+            out,
+            n_elements,
+            BLOCK=block,
+            num_warps=num_warps,
+            num_stages=1,
+        )
+    else:
+        _clamp_position_strided_kernel[grid](
+            seq_lens,
+            out,
+            n_elements,
+            seq_lens.stride(0),
+            out.stride(0),
+            BLOCK=block,
+            num_warps=num_warps,
+            num_stages=1,
+        )
     return out
 
 
