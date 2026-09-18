@@ -154,7 +154,11 @@ def concat_and_cast_mha_k(
 
     # Tile heads of one token together so the broadcast RoPE segment is loaded
     # once per head tile instead of once per flattened row.
-    heads_per_program = HEADS_PER_PROGRAM if max_block <= 512 else 1
+    # Tail-specialize small-head shapes instead of paying for masked lanes.
+    heads_per_program = min(
+        HEADS_PER_PROGRAM if max_block <= 512 else 1,
+        heads,
+    )
     if max_block <= 128:
         num_warps = 1
     elif max_block <= 1024:
