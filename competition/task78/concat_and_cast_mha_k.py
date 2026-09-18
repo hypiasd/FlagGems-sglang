@@ -154,10 +154,8 @@ def concat_and_cast_mha_k(
     # fall back to one head to keep register pressure bounded.
     # Avoid launching a partially masked head tile when the test shape has
     # fewer heads than the preferred tile width.
-    heads_per_program = min(
-        HEADS_PER_PROGRAM if max_block <= 512 else 1,
-        heads,
-    )
+    preferred_heads = HEADS_PER_PROGRAM if max_block <= 512 else 1
+    heads_per_program = 1 if heads == 1 else preferred_heads
 
     # Keep the strided fallback one program per row. The contiguous path above
     # uses head tiles; larger rows still benefit from more warps while small

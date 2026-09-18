@@ -156,7 +156,7 @@ def concat_and_cast_mha_k(
         else HEADS_PER_PROGRAM if max_block <= 256
         else 4 if max_block <= 512 else 1
     )
-    heads_per_program = min(heads_per_program, heads)
+    heads_per_program = 1 if heads == 1 else heads_per_program
     common = getattr(
         tl,
         str(torch.promote_types(k_nope.dtype, k_rope.dtype)).split(".")[-1],

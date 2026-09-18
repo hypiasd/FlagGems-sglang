@@ -88,7 +88,7 @@ def concat_and_cast_mha_k(k, k_nope, k_rope):
     if k_nope.is_contiguous() and k_rope.is_contiguous():
         # Small source tiles can afford a wider head tile and amortize the
         # persistent token-loop overhead without changing the bounded grid.
-        head_tile = 8 if max(bn, br) <= 128 else 4
+        head_tile = min(8 if max(bn, br) <= 128 else 4, k.shape[1])
         _concat_tokens_contiguous[(min(32, tokens),)](
             out, k_nope, k_rope, tokens, k.shape[1], dn, dr,
             COMMON=common, HEAD_TILE=head_tile, BN=bn, BR=br, num_warps=4,
