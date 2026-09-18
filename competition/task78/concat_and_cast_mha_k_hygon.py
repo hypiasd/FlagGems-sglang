@@ -11,7 +11,7 @@ import triton
 import triton.language as tl
 
 
-HEADS_PER_PROGRAM = 4
+HEADS_PER_PROGRAM = 2
 
 
 @triton.jit

@@ -11,29 +11,34 @@ import triton
 import triton.language as tl
 
 
+HEADS_PER_PROGRAM = 4
+
+
 @triton.jit
 def _concat_and_cast_mha_k_contiguous_kernel(
     out_ptr,
     nope_ptr,
     rope_ptr,
-    HEADS: tl.constexpr,
+    HEADS,
+    HEADS_PER_PROGRAM: tl.constexpr,
     NOPE_DIM: tl.constexpr,
     ROPE_DIM: tl.constexpr,
     BLOCK_NOPE: tl.constexpr,
     BLOCK_ROPE: tl.constexpr,
     COMMON: tl.constexpr,
 ):
-    """Contiguous-input fast path with compile-time row strides."""
+    """Contiguous path reusing the broadcast RoPE load across a head tile."""
     token = tl.program_id(0)
-    head = tl.program_id(1)
-    row = token * HEADS + head
-    out_row = out_ptr + row * (NOPE_DIM + ROPE_DIM)
-    nope_row = nope_ptr + row * NOPE_DIM
+    heads = tl.program_id(1) * HEADS_PER_PROGRAM + tl.arange(0, HEADS_PER_PROGRAM)
+    row_mask = heads < HEADS
+    rows = token * HEADS + heads
+    out_row = out_ptr + rows[:, None] * (NOPE_DIM + ROPE_DIM)
+    nope_row = nope_ptr + rows[:, None] * NOPE_DIM
     rope_row = rope_ptr + token * ROPE_DIM
 
     if NOPE_DIM > 0:
         nope_cols = tl.arange(0, BLOCK_NOPE)
-        nope_mask = nope_cols < NOPE_DIM
+        nope_mask = row_mask[:, None] & (nope_cols[None, :] < NOPE_DIM)
         nope_value = tl.load(
             nope_row + nope_cols,
             mask=nope_mask,
@@ -43,9 +48,9 @@ def _concat_and_cast_mha_k_contiguous_kernel(
 
     if ROPE_DIM > 0:
         rope_cols = tl.arange(0, BLOCK_ROPE)
-        rope_mask = rope_cols < ROPE_DIM
+        rope_mask = row_mask[:, None] & (rope_cols[None, :] < ROPE_DIM)
         rope_value = tl.load(
-            rope_row + rope_cols,
+            rope_row + rope_cols[None, :],
             mask=rope_mask,
             other=0,
         ).to(COMMON)
@@ -145,8 +150,13 @@ def concat_and_cast_mha_k(
     block_rope = triton.next_power_of_2(max(1, rope_dim))
     max_block = max(block_nope, block_rope)
 
-    # Keep one program per row. This is a pure copy/cast kernel, so larger
-    # rows benefit from more warps while small cache rows avoid idle lanes.
+    # Reuse the broadcast RoPE vector across a small head tile. Larger rows
+    # fall back to one head to keep register pressure bounded.
+    heads_per_program = HEADS_PER_PROGRAM if max_block <= 512 else 1
+
+    # Keep the strided fallback one program per row. The contiguous path above
+    # uses head tiles; larger rows still benefit from more warps while small
+    # cache rows avoid idle lanes.
     if max_block <= 128:
         num_warps = 1
     elif max_block <= 1024:
@@ -160,11 +170,12 @@ def concat_and_cast_mha_k(
     )
 
     if k_nope.is_contiguous() and k_rope.is_contiguous():
-        _concat_and_cast_mha_k_contiguous_kernel[(tokens, heads)](
+        _concat_and_cast_mha_k_contiguous_kernel[(tokens, triton.cdiv(heads, heads_per_program))](
             out,
             k_nope,
             k_rope,
             HEADS=heads,
+            HEADS_PER_PROGRAM=heads_per_program,
             NOPE_DIM=nope_dim,
             ROPE_DIM=rope_dim,
             BLOCK_NOPE=block_nope,

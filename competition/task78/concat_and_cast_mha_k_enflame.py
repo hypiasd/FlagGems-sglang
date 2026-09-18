@@ -11,7 +11,7 @@ import triton
 import triton.language as tl
 
 
-HEADS_PER_PROGRAM = 4
+HEADS_PER_PROGRAM = 8
 
 
 @triton.jit
@@ -148,18 +148,23 @@ def concat_and_cast_mha_k(
     rope_dim = k_rope.shape[-1]
     block_nope = triton.next_power_of_2(max(1, nope_dim))
     block_rope = triton.next_power_of_2(max(1, rope_dim))
+    max_block = max(block_nope, block_rope)
+    heads_per_program = (
+        HEADS_PER_PROGRAM if max_block <= 256
+        else 4 if max_block <= 512 else 1
+    )
     common = getattr(
         tl,
         str(torch.promote_types(k_nope.dtype, k_rope.dtype)).split(".")[-1],
     )
 
     if k_nope.is_contiguous() and k_rope.is_contiguous():
-        _concat_and_cast_mha_k_contiguous_kernel[(tokens, triton.cdiv(heads, HEADS_PER_PROGRAM))](
+        _concat_and_cast_mha_k_contiguous_kernel[(tokens, triton.cdiv(heads, heads_per_program))](
             out,
             k_nope,
             k_rope,
             HEADS=heads,
-            HEADS_PER_PROGRAM=HEADS_PER_PROGRAM,
+            HEADS_PER_PROGRAM=heads_per_program,
             NOPE_DIM=nope_dim,
             ROPE_DIM=rope_dim,
             BLOCK_NOPE=block_nope,
