@@ -24,6 +24,10 @@ benchmark/*.json
 !benchmark/core_shapes.yaml
 /*.json
 
+# Local KernelGen credentials and generated candidate outputs
+/.mcp.json
+/competition/task78/kernelgen/candidates/
+
 # Reports produced by pytest --record and tools/run_tests.py
 out_tests/
 out_benchmark/

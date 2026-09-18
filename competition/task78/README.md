@@ -27,3 +27,12 @@ contains the tested source hashes and results.
 
 Historical version directories and ZIPs remain reproducible references.
 The user uploads candidates to FlagOS for real eight-chip evaluation.
+
+## KernelGen candidate workflow
+
+The repository-local KernelGen workflow is documented in
+[`kernelgen/README.md`](kernelgen/README.md). The official project Skill is
+under `.agents/skills/kernelgen-flagos/`; Task 78-specific routing and safety
+rules are under `.agents/skills/task78-kernelgen/`. KernelGen outputs remain
+isolated under `kernelgen/candidates/` until they pass the local validator and
+are deliberately promoted into a numbered version.
