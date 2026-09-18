@@ -1,13 +1,30 @@
 # Task 78 v19 — fused output stores and RoPE reuse
 
-Status: local candidate, not submitted. Source baseline: v18 at `3749eff`;
-v18 result documentation: `954ca8d`. The user uploads the ZIP.
+Status: submitted and completed with 8/8. Source baseline: v18 at `3749eff`;
+v18 result documentation: `954ca8d`.
 
 v18 finished with 6/8: Iluvatar 2.18x, MetaX 1.25x, Enflame Failed,
 Hygon 2.12x, Kunlunxin Failed, Ascend 0.02x, International A/B 1.57/1.54x.
 Enflame is a NEW failure relative to v17's 0.47x; Kunlunxin failed in both.
 No traceback establishes whether either failure is compilation, runtime,
 comparison, or timeout. The suspected causes below are not diagnoses.
+
+## Observed v19 result
+
+Arc completed v19 at 09-18 22:57 with Iluvatar `2.36x`, MetaX `1.45x`,
+Enflame `0.25x`, Hygon `2.45x`, Kunlunxin `0.27x`, Ascend `0.14x`,
+International A `1.60x`, and International B `1.51x`. All 8/8 chips passed;
+the aggregate was `1.25x`. Compared with v18, Iluvatar, MetaX, Hygon,
+Ascend and both generic chips changed by `+0.18/+0.20/+0.33/+0.12/+0.03/-0.03`;
+Enflame and Kunlunxin became measurable after their v18 failures. Compared
+with the complete v12 result of `1.27x`, v19 is still `0.02x` lower.
+
+The strongest positive evidence is that the new structures restore 8/8 and
+raise Iluvatar, MetaX and Hygon. The remaining performance bottlenecks are
+Enflame `0.25x`, Ascend `0.14x`, and Kunlunxin `0.27x`; their passing scores
+are still below v16's `0.60/0.21/0.30x` in the same chip order for Enflame,
+Ascend and Kunlunxin. This is a device observation, not a compiler-root-cause
+traceback.
 
 ## Per-chip structural changes
 
@@ -62,8 +79,8 @@ flat row batches; suffix values remain live across the unrolled head loop.
   indices before address multiplication for large relative offsets.
   CPU tests use int64 internally and cannot establish actual 32-bit lowering.
 - Torch is used for allocation, dtype promotion and tensor metadata only.
-- No device-dependent score prediction, no exception fallback, no new online
-  submission performed by the agent.
+- No device-dependent score prediction or exception fallback. The v19 package
+  was submitted by the user; the result above is from the FlagOS result page.
 
 ## Validation and handoff
 
