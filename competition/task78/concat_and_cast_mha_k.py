@@ -12,6 +12,51 @@ import triton.language as tl
 
 
 @triton.jit
+def _concat_and_cast_mha_k_contiguous_kernel(
+    out_ptr,
+    nope_ptr,
+    rope_ptr,
+    HEADS: tl.constexpr,
+    NOPE_DIM: tl.constexpr,
+    ROPE_DIM: tl.constexpr,
+    BLOCK_NOPE: tl.constexpr,
+    BLOCK_ROPE: tl.constexpr,
+    COMMON: tl.constexpr,
+):
+    """Contiguous-input fast path with compile-time row strides."""
+    token = tl.program_id(0)
+    head = tl.program_id(1)
+    row = token * HEADS + head
+    out_row = out_ptr + row * (NOPE_DIM + ROPE_DIM)
+    nope_row = nope_ptr + row * NOPE_DIM
+    rope_row = rope_ptr + token * ROPE_DIM
+
+    if NOPE_DIM > 0:
+        nope_cols = tl.arange(0, BLOCK_NOPE)
+        nope_mask = nope_cols < NOPE_DIM
+        nope_value = tl.load(
+            nope_row + nope_cols,
+            mask=nope_mask,
+            other=0,
+        ).to(COMMON)
+        tl.store(out_row + nope_cols, nope_value, mask=nope_mask)
+
+    if ROPE_DIM > 0:
+        rope_cols = tl.arange(0, BLOCK_ROPE)
+        rope_mask = rope_cols < ROPE_DIM
+        rope_value = tl.load(
+            rope_row + rope_cols,
+            mask=rope_mask,
+            other=0,
+        ).to(COMMON)
+        tl.store(
+            out_row + NOPE_DIM + rope_cols,
+            rope_value,
+            mask=rope_mask,
+        )
+
+
+@triton.jit
 def _concat_and_cast_mha_k_kernel(
     out_ptr,
     nope_ptr,
@@ -114,26 +159,41 @@ def concat_and_cast_mha_k(
         str(torch.promote_types(k_nope.dtype, k_rope.dtype)).split(".")[-1],
     )
 
-    _concat_and_cast_mha_k_kernel[(tokens, heads)](
-        out,
-        k_nope,
-        k_rope,
-        out.stride(0),
-        out.stride(1),
-        out.stride(2),
-        k_nope.stride(0),
-        k_nope.stride(1),
-        k_nope.stride(2),
-        k_rope.stride(0),
-        k_rope.stride(2),
-        NOPE_DIM=nope_dim,
-        ROPE_DIM=rope_dim,
-        BLOCK_NOPE=block_nope,
-        BLOCK_ROPE=block_rope,
-        COMMON=common,
-        num_warps=num_warps,
-        num_stages=1,
-    )
+    if k_nope.is_contiguous() and k_rope.is_contiguous():
+        _concat_and_cast_mha_k_contiguous_kernel[(tokens, heads)](
+            out,
+            k_nope,
+            k_rope,
+            HEADS=heads,
+            NOPE_DIM=nope_dim,
+            ROPE_DIM=rope_dim,
+            BLOCK_NOPE=block_nope,
+            BLOCK_ROPE=block_rope,
+            COMMON=common,
+            num_warps=num_warps,
+            num_stages=1,
+        )
+    else:
+        _concat_and_cast_mha_k_kernel[(tokens, heads)](
+            out,
+            k_nope,
+            k_rope,
+            out.stride(0),
+            out.stride(1),
+            out.stride(2),
+            k_nope.stride(0),
+            k_nope.stride(1),
+            k_nope.stride(2),
+            k_rope.stride(0),
+            k_rope.stride(2),
+            NOPE_DIM=nope_dim,
+            ROPE_DIM=rope_dim,
+            BLOCK_NOPE=block_nope,
+            BLOCK_ROPE=block_rope,
+            COMMON=common,
+            num_warps=num_warps,
+            num_stages=1,
+        )
     return out
 
 
