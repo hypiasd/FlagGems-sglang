@@ -58,7 +58,16 @@ def concat_and_cast_mha_k(
     """Build ``k`` from per-head NoPE and single-head broadcast RoPE data."""
     tokens, heads, total_dim = k.shape
     nope_dim = k_nope.shape[-1]
-    out = torch.empty_like(k)
+    # ``torch.cat(...).to(...)`` in the reference produces a contiguous
+    # result.  Do not inherit a vendor-specific/non-contiguous layout from
+    # the shape-and-dtype carrier ``k``: NPU exact comparison checks layout
+    # independently of strides.
+    out = torch.empty(
+        k.shape,
+        dtype=k.dtype,
+        device=k.device,
+        memory_format=torch.contiguous_format,
+    )
     if tokens == 0 or heads == 0 or total_dim == 0:
         return out
 
