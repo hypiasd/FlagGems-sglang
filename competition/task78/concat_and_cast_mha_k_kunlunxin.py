@@ -1,71 +1,71 @@
-"""Task 78 v18: Kunlunxin, dense segment jobs in one launch.
-
-NoPE and RoPE jobs never mix source pointer types or use 3-D broadcasts.
-PyTorch only allocates output and determines the reference promotion dtype.
-"""
+"""Task 78 v19: Kunlunxin, serial heads sharing one 1-D RoPE vector."""
 import torch
 import triton
 import triton.language as tl
 
 
 @triton.jit
-def _concat_segment_jobs_v18(
+def _concat_serial_heads_v19(
     out, nope, rope,
     T: tl.constexpr, H: tl.constexpr, DN: tl.constexpr, DR: tl.constexpr,
     NS0: tl.constexpr, NS1: tl.constexpr, NS2: tl.constexpr,
     RS0: tl.constexpr, RS2: tl.constexpr,
-    COMMON: tl.constexpr, CONTIGUOUS: tl.constexpr,
-    BLOCK: tl.constexpr, PREFIX_JOBS: tl.constexpr, TOTAL_JOBS: tl.constexpr,
+    COMMON: tl.constexpr, WIDE: tl.constexpr,
+    HS: tl.constexpr, BN: tl.constexpr, BR: tl.constexpr,
 ):
-    """Copy actual elements packed across rows; prefix/suffix stores are disjoint."""
-    job = tl.program_id(0)
-    if DN > 0:
-        if job < PREFIX_JOBS:
-            offsets = job.to(tl.int64) * BLOCK + tl.arange(0, BLOCK)
-            row = offsets // DN
-            col = offsets % DN
-            valid = offsets < T * H * DN
-            if CONTIGUOUS:
-                src = offsets
-            else:
-                src = (row // H) * NS0 + (row % H) * NS1 + col * NS2
-            value = tl.load(nope + src, mask=valid, other=0).to(COMMON)
-            tl.store(out + row * (DN + DR) + col, value, mask=valid)
+    token = tl.program_id(0)
+    head_job = tl.program_id(1)
+    if WIDE:
+        token = token.to(tl.int64)
+        head_job = head_job.to(tl.int64)
+    first_head = head_job * HS
     if DR > 0:
-        if job >= PREFIX_JOBS:
-            offsets = (job.to(tl.int64) - PREFIX_JOBS) * BLOCK + tl.arange(0, BLOCK)
-            row = offsets // DR
-            col = offsets % DR
-            valid = offsets < T * H * DR
-            if CONTIGUOUS:
-                src = (row // H) * DR + col
-            else:
-                src = (row // H) * RS0 + col * RS2
-            value = tl.load(rope + src, mask=valid, other=0).to(COMMON)
-            tl.store(out + row * (DN + DR) + DN + col, value, mask=valid)
+        rc = tl.arange(0, BR)
+        if WIDE:
+            rc = rc.to(tl.int64)
+        rope_value = tl.load(rope + token * RS0 + rc * RS2,
+                             mask=rc < DR, other=0).to(COMMON)
+    # Only 1-D vectors reach load/store: no head broadcast, job-type branch,
+    # element division/modulo, or persistent loop. Reuse the suffix registers.
+    for h in tl.static_range(0, HS):
+        head = first_head + h
+        dst = (token * H + head) * (DN + DR)
+        if DN > 0:
+            for first_col in range(0, DN, BN):
+                nc = first_col + tl.arange(0, BN)
+                if WIDE:
+                    nc = nc.to(tl.int64)
+                valid = (head < H) & (nc < DN)
+                value = tl.load(nope + token * NS0 + head * NS1 + nc * NS2,
+                                mask=valid, other=0).to(COMMON)
+                tl.store(out + dst + nc, value, mask=valid)
+        if DR > 0:
+            tl.store(out + dst + DN + rc, rope_value,
+                     mask=(head < H) & (rc < DR))
 
 
 def concat_and_cast_mha_k(k, k_nope, k_rope):
-    out = torch.empty(
-        k.shape, dtype=k.dtype, device=k.device,
-        memory_format=torch.contiguous_format,
-    )
+    out = torch.empty(k.shape, dtype=k.dtype, device=k.device,
+                      memory_format=torch.contiguous_format)
     tokens, heads, total_dim = k.shape
     if tokens == 0 or heads == 0 or total_dim == 0:
         return out
     dn, dr = k_nope.shape[2], k_rope.shape[2]
-    common = getattr(
-        tl, str(torch.promote_types(k_nope.dtype, k_rope.dtype)).split(".")[-1],
-    )
-    block = 512
-    prefix_jobs = triton.cdiv(tokens * heads * dn, block)
-    jobs = prefix_jobs + triton.cdiv(tokens * heads * dr, block)
-    _concat_segment_jobs_v18[(jobs,)](
+    common = getattr(tl, str(torch.promote_types(k_nope.dtype, k_rope.dtype)).split(".")[-1])
+    # Use native-width indices on ordinary tensors, widen before multiplication
+    # when any relative address needs more than signed 32 bits.
+    ns, rs = k_nope.stride(), k_rope.stride()
+    span = max(tokens * heads * total_dim,
+               (tokens - 1) * ns[0] + (heads - 1) * ns[1] + max(dn - 1, 0) * ns[2] + 1,
+               (tokens - 1) * rs[0] + max(dr - 1, 0) * rs[2] + 1)
+    wide = span >= 2**31
+    hs = min(2, heads)
+    bn = min(512, triton.next_power_of_2(max(1, dn)))
+    br = triton.next_power_of_2(max(1, dr))
+    _concat_serial_heads_v19[(tokens, triton.cdiv(heads, hs))](
         out, k_nope, k_rope, tokens, heads, dn, dr,
-        *k_nope.stride(), k_rope.stride(0), k_rope.stride(2),
-        COMMON=common,
-        CONTIGUOUS=k_nope.is_contiguous() and k_rope.is_contiguous(),
-        BLOCK=block, PREFIX_JOBS=prefix_jobs, TOTAL_JOBS=jobs,
+        *ns, rs[0], rs[2],
+        COMMON=common, WIDE=wide, HS=hs, BN=bn, BR=br,
         num_warps=1, num_stages=1,
     )
     return out

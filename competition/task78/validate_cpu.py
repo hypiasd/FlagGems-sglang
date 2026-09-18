@@ -209,6 +209,8 @@ class CPUModel:
         self.tl.num_programs = self.num_programs
         self.tl.arange = self.arange
         self.tl.static_range = range
+        self.tl.where = torch.where
+        self.tl.maximum = lambda x, y: torch.maximum(torch.as_tensor(x), torch.as_tensor(y))
         self.tl.load = self.load
         self.tl.store = self.store
 
