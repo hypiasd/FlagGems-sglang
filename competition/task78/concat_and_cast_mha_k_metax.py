@@ -15,6 +15,50 @@ HEADS_PER_PROGRAM = 8
 
 
 @triton.jit
+def _concat_nope_segment_contiguous_v17(
+    out_ptr,
+    nope_ptr,
+    HEADS,
+    NOPE_DIM: tl.constexpr,
+    ROPE_DIM: tl.constexpr,
+    BLOCK_NOPE: tl.constexpr,
+    COMMON: tl.constexpr,
+):
+    """Wide-row prefix phase; the suffix is not kept live in this program."""
+    token = tl.program_id(0)
+    head = tl.program_id(1)
+    row = token * HEADS + head
+    cols = tl.arange(0, BLOCK_NOPE)
+    mask = cols < NOPE_DIM
+    value = tl.load(nope_ptr + row * NOPE_DIM + cols, mask=mask, other=0).to(COMMON)
+    tl.store(out_ptr + row * (NOPE_DIM + ROPE_DIM) + cols, value, mask=mask)
+
+
+@triton.jit
+def _concat_rope_segment_contiguous_v17(
+    out_ptr,
+    rope_ptr,
+    HEADS,
+    NOPE_DIM: tl.constexpr,
+    ROPE_DIM: tl.constexpr,
+    BLOCK_ROPE: tl.constexpr,
+    COMMON: tl.constexpr,
+):
+    """Wide-row suffix phase; each RoPE vector is broadcast by the stores."""
+    token = tl.program_id(0)
+    head = tl.program_id(1)
+    row = token * HEADS + head
+    cols = tl.arange(0, BLOCK_ROPE)
+    mask = cols < ROPE_DIM
+    value = tl.load(rope_ptr + token * ROPE_DIM + cols, mask=mask, other=0).to(COMMON)
+    tl.store(
+        out_ptr + row * (NOPE_DIM + ROPE_DIM) + NOPE_DIM + cols,
+        value,
+        mask=mask,
+    )
+
+
+@triton.jit
 def _concat_and_cast_mha_k_full_token_pair_kernel(
     out_ptr,
     nope_ptr,
@@ -231,7 +275,32 @@ def concat_and_cast_mha_k(
             and rope_dim == block_rope
             and heads % heads_per_program == 0
         )
-        if full_blocks and tokens % 2 == 0:
+        if max_block > 512:
+            if nope_dim > 0:
+                _concat_nope_segment_contiguous_v17[(tokens, heads)](
+                    out,
+                    k_nope,
+                    heads,
+                    NOPE_DIM=nope_dim,
+                    ROPE_DIM=rope_dim,
+                    BLOCK_NOPE=block_nope,
+                    COMMON=common,
+                    num_warps=num_warps,
+                    num_stages=1,
+                )
+            if rope_dim > 0:
+                _concat_rope_segment_contiguous_v17[(tokens, heads)](
+                    out,
+                    k_rope,
+                    heads,
+                    NOPE_DIM=nope_dim,
+                    ROPE_DIM=rope_dim,
+                    BLOCK_ROPE=block_rope,
+                    COMMON=common,
+                    num_warps=num_warps,
+                    num_stages=1,
+                )
+        elif full_blocks and tokens % 2 == 0:
             _concat_and_cast_mha_k_full_token_pair_kernel[
                 (triton.cdiv(tokens, 2), triton.cdiv(heads, heads_per_program))
             ](

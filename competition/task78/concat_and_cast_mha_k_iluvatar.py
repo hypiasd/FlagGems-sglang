@@ -15,6 +15,50 @@ HEADS_PER_PROGRAM = 2
 
 
 @triton.jit
+def _concat_nope_segment_contiguous_v17(
+    out_ptr,
+    nope_ptr,
+    HEADS,
+    NOPE_DIM: tl.constexpr,
+    ROPE_DIM: tl.constexpr,
+    BLOCK_NOPE: tl.constexpr,
+    COMMON: tl.constexpr,
+):
+    """Wide-row prefix phase with a minimal live working set."""
+    token = tl.program_id(0)
+    head = tl.program_id(1)
+    row = token * HEADS + head
+    cols = tl.arange(0, BLOCK_NOPE)
+    mask = cols < NOPE_DIM
+    value = tl.load(nope_ptr + row * NOPE_DIM + cols, mask=mask, other=0).to(COMMON)
+    tl.store(out_ptr + row * (NOPE_DIM + ROPE_DIM) + cols, value, mask=mask)
+
+
+@triton.jit
+def _concat_rope_segment_contiguous_v17(
+    out_ptr,
+    rope_ptr,
+    HEADS,
+    NOPE_DIM: tl.constexpr,
+    ROPE_DIM: tl.constexpr,
+    BLOCK_ROPE: tl.constexpr,
+    COMMON: tl.constexpr,
+):
+    """Wide-row suffix phase; broadcast is expressed only at store time."""
+    token = tl.program_id(0)
+    head = tl.program_id(1)
+    row = token * HEADS + head
+    cols = tl.arange(0, BLOCK_ROPE)
+    mask = cols < ROPE_DIM
+    value = tl.load(rope_ptr + token * ROPE_DIM + cols, mask=mask, other=0).to(COMMON)
+    tl.store(
+        out_ptr + row * (NOPE_DIM + ROPE_DIM) + NOPE_DIM + cols,
+        value,
+        mask=mask,
+    )
+
+
+@triton.jit
 def _concat_token_pair_contiguous(
     out, nope, rope, TOKENS: tl.constexpr, H: tl.constexpr,
     DN: tl.constexpr, DR: tl.constexpr,
@@ -296,7 +340,32 @@ def concat_and_cast_mha_k(
     )
 
     if k_nope.is_contiguous() and k_rope.is_contiguous():
-        if max_block <= 256 and tokens >= 2:
+        if max_block > 512:
+            if nope_dim > 0:
+                _concat_nope_segment_contiguous_v17[(tokens, heads)](
+                    out,
+                    k_nope,
+                    heads,
+                    NOPE_DIM=nope_dim,
+                    ROPE_DIM=rope_dim,
+                    BLOCK_NOPE=block_nope,
+                    COMMON=common,
+                    num_warps=num_warps,
+                    num_stages=1,
+                )
+            if rope_dim > 0:
+                _concat_rope_segment_contiguous_v17[(tokens, heads)](
+                    out,
+                    k_rope,
+                    heads,
+                    NOPE_DIM=nope_dim,
+                    ROPE_DIM=rope_dim,
+                    BLOCK_ROPE=block_rope,
+                    COMMON=common,
+                    num_warps=num_warps,
+                    num_stages=1,
+                )
+        elif max_block <= 256 and tokens >= 2:
             _concat_token_pair_contiguous[(triton.cdiv(tokens, 2),)](
                 out,
                 k_nope,

@@ -5,6 +5,52 @@ import triton.language as tl
 
 
 @triton.jit
+def _concat_token_pair_contiguous_v17(
+    out, nope, rope, TOKENS: tl.constexpr, H: tl.constexpr,
+    DN: tl.constexpr, DR: tl.constexpr,
+    COMMON: tl.constexpr, HEAD_TILE: tl.constexpr,
+    BN: tl.constexpr, BR: tl.constexpr,
+):
+    """Bounded two-token/head-tile path for compact Ascend rows."""
+    for pair in range(
+        tl.program_id(0), (TOKENS + 1) // 2, tl.num_programs(0)
+    ):
+        tokens = pair * 2 + tl.arange(0, 2)
+        token_mask = tokens < TOKENS
+        heads = tl.program_id(1) * HEAD_TILE + tl.arange(0, HEAD_TILE)
+        head_mask = heads < H
+        rows = tokens[:, None] * H + heads[None, :]
+        dst = out + rows[:, :, None] * (DN + DR)
+
+        if DN > 0:
+            cols = tl.arange(0, BN)
+            mask = token_mask[:, None, None] & head_mask[None, :, None]
+            mask = mask & (cols[None, None, :] < DN)
+            value = tl.load(
+                nope + rows[:, :, None] * DN + cols[None, None, :],
+                mask=mask,
+                other=0,
+            ).to(COMMON)
+            tl.store(dst + cols[None, None, :], value, mask=mask)
+
+        if DR > 0:
+            cols = tl.arange(0, BR)
+            rope_mask = token_mask[:, None] & (cols[None, :] < DR)
+            value = tl.load(
+                rope + tokens[:, None] * DR + cols[None, :],
+                mask=rope_mask,
+                other=0,
+            ).to(COMMON)
+            mask = token_mask[:, None, None] & head_mask[None, :, None]
+            mask = mask & (cols[None, None, :] < DR)
+            tl.store(
+                dst + DN + cols[None, None, :],
+                value[:, None, :],
+                mask=mask,
+            )
+
+
+@triton.jit
 def _concat_rows(
     out, nope, rope, ROWS: tl.constexpr, H: tl.constexpr,
     DN: tl.constexpr, DR: tl.constexpr,
@@ -165,7 +211,25 @@ def concat_and_cast_mha_k(k, k_nope, k_rope):
         head_tile = min(8 if max(bn, br) <= 128 else 4, k.shape[1])
         token_span = 2 if max(bn, br) <= 128 else 1
         token_programs = min(32, max(1, triton.cdiv(tokens, token_span)))
-        if max(bn, br) <= 256:
+        if max(bn, br) <= 128 and tokens >= 2:
+            _concat_token_pair_contiguous_v17[
+                (min(32, triton.cdiv(tokens, 2)), triton.cdiv(k.shape[1], 4))
+            ](
+                out,
+                k_nope,
+                k_rope,
+                tokens,
+                k.shape[1],
+                dn,
+                dr,
+                COMMON=common,
+                HEAD_TILE=4,
+                BN=bn,
+                BR=br,
+                num_warps=1,
+                num_stages=1,
+            )
+        elif max(bn, br) <= 256:
             _concat_rows_contiguous_v16[grid](
                 out, k_nope, k_rope, rows, k.shape[1], dn, dr,
                 COMMON=common, BM=bm, BN=bn, BR=br, num_warps=4,

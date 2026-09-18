@@ -56,6 +56,52 @@ def _concat_rope_contiguous_kernel(
 
 
 @triton.jit
+def _concat_token_pair_contiguous_v17(
+    out,
+    nope,
+    rope,
+    TOKENS: tl.constexpr,
+    H: tl.constexpr,
+    DN: tl.constexpr,
+    DR: tl.constexpr,
+    COMMON: tl.constexpr,
+    HEAD_TILE: tl.constexpr,
+    BN: tl.constexpr,
+    BR: tl.constexpr,
+):
+    """Two-token/head-tile mapping without a token-persistent loop."""
+    tokens = tl.program_id(0) * 2 + tl.arange(0, 2)
+    token_mask = tokens < TOKENS
+    heads = tl.program_id(1) * HEAD_TILE + tl.arange(0, HEAD_TILE)
+    head_mask = heads < H
+    rows = tokens[:, None] * H + heads[None, :]
+    dst = out + rows[:, :, None] * (DN + DR)
+
+    if DN > 0:
+        cols = tl.arange(0, BN)
+        mask = token_mask[:, None, None] & head_mask[None, :, None]
+        mask = mask & (cols[None, None, :] < DN)
+        value = tl.load(
+            nope + rows[:, :, None] * DN + cols[None, None, :],
+            mask=mask,
+            other=0,
+        ).to(COMMON)
+        tl.store(dst + cols[None, None, :], value, mask=mask)
+
+    if DR > 0:
+        cols = tl.arange(0, BR)
+        rope_mask = token_mask[:, None] & (cols[None, :] < DR)
+        value = tl.load(
+            rope + tokens[:, None] * DR + cols[None, :],
+            mask=rope_mask,
+            other=0,
+        ).to(COMMON)
+        mask = token_mask[:, None, None] & head_mask[None, :, None]
+        mask = mask & (cols[None, None, :] < DR)
+        tl.store(dst + DN + cols[None, None, :], value[:, None, :], mask=mask)
+
+
+@triton.jit
 def _concat_tokens_contiguous_reuse_rope(
     out, nope, rope, TOKENS: tl.constexpr, H: tl.constexpr,
     DN: tl.constexpr, DR: tl.constexpr,
@@ -248,7 +294,25 @@ def concat_and_cast_mha_k(
     )
 
     if k_nope.is_contiguous() and k_rope.is_contiguous():
-        if max_block <= 512:
+        if max_block <= 256 and tokens >= 2:
+            _concat_token_pair_contiguous_v17[
+                (triton.cdiv(tokens, 2), triton.cdiv(heads, 4))
+            ](
+                out,
+                k_nope,
+                k_rope,
+                tokens,
+                heads,
+                nope_dim,
+                rope_dim,
+                COMMON=common,
+                HEAD_TILE=4,
+                BN=block_nope,
+                BR=block_rope,
+                num_warps=1,
+                num_stages=1,
+            )
+        elif max_block <= 512:
             if nope_dim > 0:
                 _concat_nope_contiguous_kernel[(tokens, heads)](
                     out,

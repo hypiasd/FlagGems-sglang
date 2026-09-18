@@ -15,6 +15,56 @@ HEADS_PER_PROGRAM = 8
 
 
 @triton.jit
+def _concat_token_pair_contiguous_v17(
+    out,
+    nope,
+    rope,
+    TOKENS: tl.constexpr,
+    HEADS: tl.constexpr,
+    NOPE_DIM: tl.constexpr,
+    ROPE_DIM: tl.constexpr,
+    COMMON: tl.constexpr,
+    HEAD_TILE: tl.constexpr,
+    BLOCK_NOPE: tl.constexpr,
+    BLOCK_ROPE: tl.constexpr,
+):
+    """Two-token/head-tile path; each program loads two RoPE vectors once."""
+    token_pair = tl.program_id(0) * 2 + tl.arange(0, 2)
+    token_mask = token_pair < TOKENS
+    heads = tl.program_id(1) * HEAD_TILE + tl.arange(0, HEAD_TILE)
+    head_mask = heads < HEADS
+    rows = token_pair[:, None] * HEADS + heads[None, :]
+    dst = out + rows[:, :, None] * (NOPE_DIM + ROPE_DIM)
+
+    if NOPE_DIM > 0:
+        cols = tl.arange(0, BLOCK_NOPE)
+        mask = token_mask[:, None, None] & head_mask[None, :, None]
+        mask = mask & (cols[None, None, :] < NOPE_DIM)
+        value = tl.load(
+            nope + rows[:, :, None] * NOPE_DIM + cols[None, None, :],
+            mask=mask,
+            other=0,
+        ).to(COMMON)
+        tl.store(dst + cols[None, None, :], value, mask=mask)
+
+    if ROPE_DIM > 0:
+        cols = tl.arange(0, BLOCK_ROPE)
+        rope_mask = token_mask[:, None] & (cols[None, :] < ROPE_DIM)
+        value = tl.load(
+            rope + token_pair[:, None] * ROPE_DIM + cols[None, :],
+            mask=rope_mask,
+            other=0,
+        ).to(COMMON)
+        mask = token_mask[:, None, None] & head_mask[None, :, None]
+        mask = mask & (cols[None, None, :] < ROPE_DIM)
+        tl.store(
+            dst + NOPE_DIM + cols[None, None, :],
+            value[:, None, :],
+            mask=mask,
+        )
+
+
+@triton.jit
 def _concat_token_contiguous_reuse_rope(
     out, nope, rope, TOKENS: tl.constexpr, HEADS: tl.constexpr,
     NOPE_DIM: tl.constexpr, ROPE_DIM: tl.constexpr,
@@ -249,6 +299,24 @@ def concat_and_cast_mha_k(
 
     if k_nope.is_contiguous() and k_rope.is_contiguous():
         if max_block <= 128 and tokens >= 2:
+            _concat_token_pair_contiguous_v17[
+                (triton.cdiv(tokens, 2), triton.cdiv(heads, 8))
+            ](
+                out,
+                k_nope,
+                k_rope,
+                tokens,
+                heads,
+                nope_dim,
+                rope_dim,
+                COMMON=common,
+                HEAD_TILE=8,
+                BLOCK_NOPE=block_nope,
+                BLOCK_ROPE=block_rope,
+                num_warps=1,
+                num_stages=1,
+            )
+        elif max_block <= 128:
             _concat_token_contiguous_reuse_rope[(min(32, tokens),)](
                 out,
                 k_nope,
