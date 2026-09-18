@@ -10,8 +10,10 @@ live-pointer pressure while retaining RoPE reuse. MetaX and Enflame use an
 eight-head tile for small row tiles and fall back to four or one head as the
 tile grows. The generic entry and Kunlunxin suffix now use the same
 token/head broadcast layout, reducing duplicate RoPE loads; the strided
-fallback remains one program per `(token, head)`. Ascend keeps v10's bounded
-v5 schedule plus its new contiguous row-tile fast path.
+fallback remains one program per `(token, head)`. Ascend adds a new bounded
+persistent token loop: each program processes several tokens and head tiles,
+reusing one RoPE load per head tile while retaining the v10 grid bound and
+strided fallback.
 
 All paths preserve exact `expand -> cat -> cast` semantics and Triton-only
 core computation. Validation on the Apple M3 covers Python syntax, AST
