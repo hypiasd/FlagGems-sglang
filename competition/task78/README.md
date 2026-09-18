@@ -5,6 +5,8 @@ The submission entry is `concat_and_cast_mha_k` in
 `expand -> cat -> cast` into one Triton kernel and writes directly to the
 destination tensor.
 
-The current version is a correctness-first cross-chip baseline. Real
+The generic implementation is a correctness-first cross-chip baseline. The
+`_ascend.py` companion keeps the public entry point but splits the prefix and
+suffix into two explicit Triton copy kernels for Ascend compatibility. Real
 performance must be measured on the eight FlagOS target chips; this checkout
 is on an Apple M3 and cannot replace those measurements.
