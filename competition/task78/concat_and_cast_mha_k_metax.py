@@ -11,7 +11,7 @@ import triton
 import triton.language as tl
 
 
-ROWS_PER_PROGRAM = 4
+HEADS_PER_PROGRAM = 4
 
 
 @triton.jit
@@ -19,22 +19,22 @@ def _concat_and_cast_mha_k_contiguous_kernel(
     out_ptr,
     nope_ptr,
     rope_ptr,
-    total_rows,
-    HEADS: tl.constexpr,
-    ROWS_PER_PROGRAM: tl.constexpr,
+    HEADS,
+    HEADS_PER_PROGRAM: tl.constexpr,
     NOPE_DIM: tl.constexpr,
     ROPE_DIM: tl.constexpr,
     BLOCK_NOPE: tl.constexpr,
     BLOCK_ROPE: tl.constexpr,
     COMMON: tl.constexpr,
 ):
-    """Contiguous path processing several adjacent rows per program."""
-    rows = tl.program_id(0) * ROWS_PER_PROGRAM + tl.arange(0, ROWS_PER_PROGRAM)
-    row_mask = rows < total_rows
-    token = rows // HEADS
+    """Contiguous path with one broadcast RoPE load per head tile."""
+    token = tl.program_id(0)
+    heads = tl.program_id(1) * HEADS_PER_PROGRAM + tl.arange(0, HEADS_PER_PROGRAM)
+    row_mask = heads < HEADS
+    rows = token * HEADS + heads
     out_row = out_ptr + rows[:, None] * (NOPE_DIM + ROPE_DIM)
     nope_row = nope_ptr + rows[:, None] * NOPE_DIM
-    rope_row = rope_ptr + token[:, None] * ROPE_DIM
+    rope_row = rope_ptr + token * ROPE_DIM
 
     if NOPE_DIM > 0:
         nope_cols = tl.arange(0, BLOCK_NOPE)
@@ -50,7 +50,7 @@ def _concat_and_cast_mha_k_contiguous_kernel(
         rope_cols = tl.arange(0, BLOCK_ROPE)
         rope_mask = row_mask[:, None] & (rope_cols[None, :] < ROPE_DIM)
         rope_value = tl.load(
-            rope_row + rope_cols,
+            rope_row + rope_cols[None, :],
             mask=rope_mask,
             other=0,
         ).to(COMMON)
@@ -150,10 +150,9 @@ def concat_and_cast_mha_k(
     block_rope = triton.next_power_of_2(max(1, rope_dim))
     max_block = max(block_nope, block_rope)
 
-    # Amortize program/address setup on contiguous inputs without changing the
-    # conservative one-row fallback for large tiles or strided inputs.
-    rows = tokens * heads
-    rows_per_program = ROWS_PER_PROGRAM if max_block <= 512 else 1
+    # Tile heads of one token together so the broadcast RoPE segment is loaded
+    # once per head tile instead of once per flattened row.
+    heads_per_program = HEADS_PER_PROGRAM if max_block <= 512 else 1
     if max_block <= 128:
         num_warps = 1
     elif max_block <= 1024:
@@ -167,13 +166,12 @@ def concat_and_cast_mha_k(
     )
 
     if k_nope.is_contiguous() and k_rope.is_contiguous():
-        _concat_and_cast_mha_k_contiguous_kernel[(triton.cdiv(rows, rows_per_program),)](
+        _concat_and_cast_mha_k_contiguous_kernel[(tokens, triton.cdiv(heads, heads_per_program))](
             out,
             k_nope,
             k_rope,
-            rows,
             HEADS=heads,
-            ROWS_PER_PROGRAM=rows_per_program,
+            HEADS_PER_PROGRAM=heads_per_program,
             NOPE_DIM=nope_dim,
             ROPE_DIM=rope_dim,
             BLOCK_NOPE=block_nope,

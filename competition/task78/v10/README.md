@@ -1,8 +1,9 @@
 # Task 78 v10 experiment
 
 v10 is a bundled follow-up to the v9 online result (`8/8`, `1.15x`), not a
-single-constant sweep. It keeps the v9 four-row contiguous fast path for
-Iluvatar, MetaX, and Hygon because those changes produced large online gains.
+single-constant sweep. It retains the v9 contiguous path's tile budget for
+Iluvatar, MetaX, and Hygon, but replaces flattened row batching with a
+token/head tile so the broadcast RoPE segment is loaded once per head tile.
 
 The Ascend suffix retains the v5-proven bounded persistent row tile
 (`BM <= 16`, grid `<= 32`) after v9 reduced Huawei from `0.22x` to `0.14x`,
