@@ -147,12 +147,12 @@ def concat_and_cast_mha_k(
 
     # Keep one program per row. This is a pure copy/cast kernel, so larger
     # rows benefit from more warps while small cache rows avoid idle lanes.
-    # Keep the body simple, but use the XPU backend's normal four-worker
-    # pointwise launch instead of the generic small-tile heuristic.
-    if max_block <= 1024:
-        num_warps = 4
+    if max_block <= 128:
+        num_warps = 1
+    elif max_block <= 1024:
+        num_warps = 2
     else:
-        num_warps = 8
+        num_warps = 4
 
     common = getattr(
         tl,
