@@ -1,6 +1,6 @@
 # Task 78 v18 — single-launch segment scheduling
 
-Status: local candidate; not submitted to FlagOS. Base: v17 commit
+Status: submitted to FlagOS and completed with 6/8 chips. Base: v17 commit
 `ec5b273`. All nonempty inputs in each of the seven submission files execute
 a v18 kernel, including strided inputs. No shape gate restricts the new
 implementation to an unobserved wide-row subset.
@@ -25,6 +25,16 @@ on 2026-09-18. Submission time: 21:19 Beijing time. Status: completed.
 The detail page showed a leading score of 1.90x and our best 1.27x. These are
 observations at this check, not permanent leaderboard facts.
 
+## Observed v18 result
+
+The completed v18 submission returned: Iluvatar `2.18x`, MetaX `1.25x`,
+Enflame `Failed`, Hygon `2.12x`, Kunlunxin `Failed`, Ascend `0.02x`,
+International A `1.57x`, and International B `1.54x`. Only 6/8 chips passed,
+so the aggregate was invalid. The result page provided no failing-case
+traceback. The main structural suspect is the segment-job/persistent-grid
+organization on Ascend, Enflame, and Kunlunxin; this is a hypothesis, not a
+confirmed compiler root cause.
+
 The table does not reveal failing case shapes, latencies or a traceback.
 In particular, Kunlunxin's 3-D path is a suspect, not an established root
 cause. The generic split added one launch and removed head reuse; these
@@ -38,7 +48,8 @@ Paths below are relative to `competition/task78/`. A/B deliberately share
 one file but are tracked separately. All rows have the same local evidence:
 189 direct-source CPU-model cases per file, exact numerical comparisons,
 bounds/unique-write/input-immutability checks, and one launch per nonempty case.
-There are no v18 device results yet.
+Device results exist, but the local CPU-model checks below do not validate
+target-device compilation, correctness, or performance.
 
 | Target | Code / entry | Structural change from v17 | Expected benefit | Main risk | Evidence |
 | --- | --- | --- | --- | --- | --- |
