@@ -11,7 +11,50 @@ import triton
 import triton.language as tl
 
 
-HEADS_PER_PROGRAM = 4
+@triton.jit
+def _concat_rows_contiguous(
+    out, nope, rope, ROWS, H,
+    DN: tl.constexpr, DR: tl.constexpr,
+    COMMON: tl.constexpr, BM: tl.constexpr,
+    BN: tl.constexpr, BR: tl.constexpr,
+):
+    """Bounded row-batch path for contiguous XPU inputs.
+
+    A row batch keeps the XPU launch simple and amortizes token/head address
+    arithmetic across several rows. It mirrors the previously validated v5
+    schedule, but is now restricted to the contiguous case so the strided
+    fallback can retain its general pointer semantics.
+    """
+    for first in range(
+        tl.program_id(0) * BM,
+        ROWS,
+        tl.num_programs(0) * BM,
+    ):
+        rows = first + tl.arange(0, BM)
+        token = rows // H
+        head = rows % H
+        dst = rows * (DN + DR)
+        row_mask = rows < ROWS
+
+        if DN > 0:
+            cols = tl.arange(0, BN)
+            mask = row_mask[:, None] & (cols[None, :] < DN)
+            value = tl.load(
+                nope + rows[:, None] * DN + cols[None, :],
+                mask,
+                other=0,
+            ).to(COMMON)
+            tl.store(out + dst[:, None] + cols[None, :], value, mask)
+
+        if DR > 0:
+            cols = tl.arange(0, BR)
+            mask = row_mask[:, None] & (cols[None, :] < DR)
+            value = tl.load(
+                rope + token[:, None] * DR + cols[None, :],
+                mask,
+                other=0,
+            ).to(COMMON)
+            tl.store(out + dst[:, None] + DN + cols[None, :], value, mask)
 
 
 @triton.jit
@@ -149,14 +192,13 @@ def concat_and_cast_mha_k(
     block_nope = triton.next_power_of_2(max(1, nope_dim))
     block_rope = triton.next_power_of_2(max(1, rope_dim))
     max_block = max(block_nope, block_rope)
-
-    # Reuse the broadcast RoPE vector across a small head tile. Larger rows
-    # fall back to one head to keep register pressure bounded.
-    heads_per_program = HEADS_PER_PROGRAM if max_block <= 512 else 1
+    rows = tokens * heads
+    row_batch = max(1, min(16, 4096 // max_block))
+    row_grid = (min(32, triton.cdiv(rows, row_batch)),)
 
     # Keep the strided fallback one program per row. The contiguous path above
-    # uses head tiles; larger rows still benefit from more warps while small
-    # cache rows avoid idle lanes.
+    # uses a bounded row batch; larger rows still benefit from more warps while
+    # small cache rows avoid idle lanes.
     if max_block <= 128:
         num_warps = 1
     elif max_block <= 1024:
@@ -170,18 +212,19 @@ def concat_and_cast_mha_k(
     )
 
     if k_nope.is_contiguous() and k_rope.is_contiguous():
-        _concat_and_cast_mha_k_contiguous_kernel[(tokens, triton.cdiv(heads, heads_per_program))](
+        _concat_rows_contiguous[row_grid](
             out,
             k_nope,
             k_rope,
-            HEADS=heads,
-            HEADS_PER_PROGRAM=heads_per_program,
-            NOPE_DIM=nope_dim,
-            ROPE_DIM=rope_dim,
-            BLOCK_NOPE=block_nope,
-            BLOCK_ROPE=block_rope,
+            rows,
+            heads,
+            DN=nope_dim,
+            DR=rope_dim,
             COMMON=common,
-            num_warps=num_warps,
+            BM=row_batch,
+            BN=block_nope,
+            BR=block_rope,
+            num_warps=4,
             num_stages=1,
         )
     else:

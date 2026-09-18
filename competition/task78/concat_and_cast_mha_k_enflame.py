@@ -149,8 +149,11 @@ def concat_and_cast_mha_k(
     block_nope = triton.next_power_of_2(max(1, nope_dim))
     block_rope = triton.next_power_of_2(max(1, rope_dim))
     max_block = max(block_nope, block_rope)
+    # v13 tests a wider tile only for the smallest rows. The one-dimensional
+    # RoPE load keeps the extra head lanes from multiplying source loads.
     heads_per_program = (
-        HEADS_PER_PROGRAM if max_block <= 256
+        16 if max_block <= 128
+        else HEADS_PER_PROGRAM if max_block <= 256
         else 4 if max_block <= 512 else 1
     )
     common = getattr(
