@@ -12,6 +12,50 @@ import triton.language as tl
 
 
 @triton.jit
+def _concat_nope_contiguous_kernel(
+    out,
+    nope,
+    HEADS,
+    NOPE_DIM: tl.constexpr,
+    ROPE_DIM: tl.constexpr,
+    BLOCK_NOPE: tl.constexpr,
+    COMMON: tl.constexpr,
+):
+    """Simple XPU prefix copy used as the first half of the split path."""
+    token = tl.program_id(0)
+    head = tl.program_id(1)
+    row = token * HEADS + head
+    cols = tl.arange(0, BLOCK_NOPE)
+    mask = cols < NOPE_DIM
+    value = tl.load(nope + row * NOPE_DIM + cols, mask=mask, other=0).to(COMMON)
+    tl.store(out + row * (NOPE_DIM + ROPE_DIM) + cols, value, mask=mask)
+
+
+@triton.jit
+def _concat_rope_contiguous_kernel(
+    out,
+    rope,
+    HEADS,
+    NOPE_DIM: tl.constexpr,
+    ROPE_DIM: tl.constexpr,
+    BLOCK_ROPE: tl.constexpr,
+    COMMON: tl.constexpr,
+):
+    """Simple XPU suffix copy used as the second half of the split path."""
+    token = tl.program_id(0)
+    head = tl.program_id(1)
+    row = token * HEADS + head
+    cols = tl.arange(0, BLOCK_ROPE)
+    mask = cols < ROPE_DIM
+    value = tl.load(rope + token * ROPE_DIM + cols, mask=mask, other=0).to(COMMON)
+    tl.store(
+        out + row * (NOPE_DIM + ROPE_DIM) + NOPE_DIM + cols,
+        value,
+        mask=mask,
+    )
+
+
+@triton.jit
 def _concat_tokens_contiguous_reuse_rope(
     out, nope, rope, TOKENS: tl.constexpr, H: tl.constexpr,
     DN: tl.constexpr, DR: tl.constexpr,
@@ -184,9 +228,9 @@ def concat_and_cast_mha_k(
     block_nope = triton.next_power_of_2(max(1, nope_dim))
     block_rope = triton.next_power_of_2(max(1, rope_dim))
     max_block = max(block_nope, block_rope)
-    # Keep the contiguous head tile as the fallback. v15 adds a separate
-    # token-persistent path for small rows so the old row-batch regression is
-    # not reintroduced.
+    # Keep the contiguous head tile as the fallback. v16 uses a separate
+    # prefix/suffix organization for small and medium rows so the v15
+    # token-persistent failure is not reintroduced.
     heads_per_program = (
         1 if heads == 1
         else 4 if max_block <= 512 else 1
@@ -204,22 +248,31 @@ def concat_and_cast_mha_k(
     )
 
     if k_nope.is_contiguous() and k_rope.is_contiguous():
-        if max_block <= 256 and tokens >= 2:
-            _concat_tokens_contiguous_reuse_rope[(min(32, tokens),)](
-                out,
-                k_nope,
-                k_rope,
-                tokens,
-                heads,
-                nope_dim,
-                rope_dim,
-                COMMON=common,
-                HEAD_TILE=4,
-                BN=block_nope,
-                BR=block_rope,
-                num_warps=1,
-                num_stages=1,
-            )
+        if max_block <= 512:
+            if nope_dim > 0:
+                _concat_nope_contiguous_kernel[(tokens, heads)](
+                    out,
+                    k_nope,
+                    heads,
+                    NOPE_DIM=nope_dim,
+                    ROPE_DIM=rope_dim,
+                    BLOCK_NOPE=block_nope,
+                    COMMON=common,
+                    num_warps=1,
+                    num_stages=1,
+                )
+            if rope_dim > 0:
+                _concat_rope_contiguous_kernel[(tokens, heads)](
+                    out,
+                    k_rope,
+                    heads,
+                    NOPE_DIM=nope_dim,
+                    ROPE_DIM=rope_dim,
+                    BLOCK_ROPE=block_rope,
+                    COMMON=common,
+                    num_warps=1,
+                    num_stages=1,
+                )
         else:
             _concat_and_cast_mha_k_contiguous_kernel[(tokens, triton.cdiv(heads, heads_per_program))](
                 out,

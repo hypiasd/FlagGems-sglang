@@ -15,6 +15,34 @@ HEADS_PER_PROGRAM = 8
 
 
 @triton.jit
+def _concat_and_cast_mha_k_full_token_pair_kernel(
+    out_ptr,
+    nope_ptr,
+    rope_ptr,
+    HEADS,
+    HEADS_PER_PROGRAM: tl.constexpr,
+    NOPE_DIM: tl.constexpr,
+    ROPE_DIM: tl.constexpr,
+    COMMON: tl.constexpr,
+):
+    """Two-token unmasked path for complete MetaX source blocks."""
+    tokens = tl.program_id(0) * 2 + tl.arange(0, 2)
+    heads = tl.program_id(1) * HEADS_PER_PROGRAM + tl.arange(0, HEADS_PER_PROGRAM)
+    rows = tokens[:, None] * HEADS + heads[None, :]
+    dst = out_ptr + rows[:, :, None] * (NOPE_DIM + ROPE_DIM)
+    nope_cols = tl.arange(0, NOPE_DIM)
+    rope_cols = tl.arange(0, ROPE_DIM)
+    nope_value = tl.load(
+        nope_ptr + rows[:, :, None] * NOPE_DIM + nope_cols[None, None, :]
+    ).to(COMMON)
+    tl.store(dst + nope_cols[None, None, :], nope_value)
+    rope_value = tl.load(
+        rope_ptr + tokens[:, None] * ROPE_DIM + rope_cols[None, :]
+    ).to(COMMON)
+    tl.store(dst + NOPE_DIM + rope_cols[None, None, :], rope_value[:, None, :])
+
+
+@triton.jit
 def _concat_and_cast_mha_k_full_contiguous_kernel(
     out_ptr,
     nope_ptr,
@@ -203,7 +231,22 @@ def concat_and_cast_mha_k(
             and rope_dim == block_rope
             and heads % heads_per_program == 0
         )
-        if full_blocks:
+        if full_blocks and tokens % 2 == 0:
+            _concat_and_cast_mha_k_full_token_pair_kernel[
+                (triton.cdiv(tokens, 2), triton.cdiv(heads, heads_per_program))
+            ](
+                out,
+                k_nope,
+                k_rope,
+                HEADS=heads,
+                HEADS_PER_PROGRAM=heads_per_program,
+                NOPE_DIM=nope_dim,
+                ROPE_DIM=rope_dim,
+                COMMON=common,
+                num_warps=num_warps,
+                num_stages=1,
+            )
+        elif full_blocks:
             _concat_and_cast_mha_k_full_contiguous_kernel[
                 (tokens, triton.cdiv(heads, heads_per_program))
             ](

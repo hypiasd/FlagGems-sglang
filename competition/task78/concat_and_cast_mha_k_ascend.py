@@ -38,6 +38,40 @@ def _concat_rows(
 
 
 @triton.jit
+def _concat_rows_contiguous_v16(
+    out, nope, rope, ROWS: tl.constexpr, H: tl.constexpr,
+    DN: tl.constexpr, DR: tl.constexpr,
+    COMMON: tl.constexpr, BM: tl.constexpr,
+    BN: tl.constexpr, BR: tl.constexpr,
+):
+    """Bounded contiguous row tiles without a persistent token loop."""
+    for first in range(tl.program_id(0) * BM, ROWS,
+                       tl.num_programs(0) * BM):
+        rows = first + tl.arange(0, BM)
+        token = rows // H
+        dst = rows * (DN + DR)
+        row_mask = rows < ROWS
+        if DN > 0:
+            cols = tl.arange(0, BN)
+            mask = row_mask[:, None] & (cols[None, :] < DN)
+            value = tl.load(
+                nope + rows[:, None] * DN + cols[None, :],
+                mask,
+                other=0,
+            ).to(COMMON)
+            tl.store(out + dst[:, None] + cols[None, :], value, mask)
+        if DR > 0:
+            cols = tl.arange(0, BR)
+            mask = row_mask[:, None] & (cols[None, :] < DR)
+            value = tl.load(
+                rope + token[:, None] * DR + cols[None, :],
+                mask,
+                other=0,
+            ).to(COMMON)
+            tl.store(out + dst[:, None] + DN + cols[None, :], value, mask)
+
+
+@triton.jit
 def _concat_tokens_reuse_rope(
     out, nope, rope, TOKENS: tl.constexpr, H: tl.constexpr,
     DN: tl.constexpr, DR: tl.constexpr,
@@ -125,16 +159,16 @@ def concat_and_cast_mha_k(k, k_nope, k_rope):
     grid = (min(32, triton.cdiv(rows, bm)),)
     if k_nope.is_contiguous() and k_rope.is_contiguous():
         # Small source tiles can afford a wider head tile and amortize the
-        # persistent token-loop overhead. v15's tiny-block path loads RoPE
-        # once per token before walking all head tiles, while the 32-program
-        # bound remains unchanged.
+        # persistent token-loop overhead. v16's tiny/medium path uses bounded
+        # flat row tiles; larger rows retain the token loop and 32-program
+        # bound.
         head_tile = min(8 if max(bn, br) <= 128 else 4, k.shape[1])
         token_span = 2 if max(bn, br) <= 128 else 1
         token_programs = min(32, max(1, triton.cdiv(tokens, token_span)))
-        if max(bn, br) <= 128 and tokens >= 2:
-            _concat_tokens_reuse_rope[(token_programs,)](
-                out, k_nope, k_rope, tokens, k.shape[1], dn, dr,
-                COMMON=common, HEAD_TILE=head_tile, BN=bn, BR=br, num_warps=4,
+        if max(bn, br) <= 256:
+            _concat_rows_contiguous_v16[grid](
+                out, k_nope, k_rope, rows, k.shape[1], dn, dr,
+                COMMON=common, BM=bm, BN=bn, BR=br, num_warps=4,
             )
         else:
             _concat_tokens_contiguous[(token_programs,)](

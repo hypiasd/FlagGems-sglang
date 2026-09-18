@@ -15,6 +15,44 @@ HEADS_PER_PROGRAM = 8
 
 
 @triton.jit
+def _concat_token_contiguous_reuse_rope(
+    out, nope, rope, TOKENS: tl.constexpr, HEADS: tl.constexpr,
+    NOPE_DIM: tl.constexpr, ROPE_DIM: tl.constexpr,
+    COMMON: tl.constexpr, HEAD_TILE: tl.constexpr,
+    BLOCK_NOPE: tl.constexpr, BLOCK_ROPE: tl.constexpr,
+):
+    """One token program walks head tiles after a single RoPE load."""
+    for token in range(tl.program_id(0), TOKENS, tl.num_programs(0)):
+        rope_cols = tl.arange(0, BLOCK_ROPE)
+        rope_mask = rope_cols < ROPE_DIM
+        rope_value = tl.load(
+            rope + token * ROPE_DIM + rope_cols,
+            mask=rope_mask,
+            other=0,
+        ).to(COMMON)
+        for first_head in range(0, HEADS, HEAD_TILE):
+            heads = first_head + tl.arange(0, HEAD_TILE)
+            head_mask = heads < HEADS
+            rows = token * HEADS + heads
+            dst = out + rows[:, None] * (NOPE_DIM + ROPE_DIM)
+            if NOPE_DIM > 0:
+                cols = tl.arange(0, BLOCK_NOPE)
+                mask = head_mask[:, None] & (cols[None, :] < NOPE_DIM)
+                value = tl.load(
+                    nope + rows[:, None] * NOPE_DIM + cols[None, :],
+                    mask=mask,
+                    other=0,
+                ).to(COMMON)
+                tl.store(dst + cols[None, :], value, mask=mask)
+            if ROPE_DIM > 0:
+                tl.store(
+                    dst + NOPE_DIM + rope_cols[None, :],
+                    rope_value[None, :],
+                    mask=head_mask[:, None] & rope_mask[None, :],
+                )
+
+
+@triton.jit
 def _concat_nope_contiguous_kernel(
     out_ptr,
     nope_ptr,
@@ -195,7 +233,7 @@ def concat_and_cast_mha_k(
     block_nope = triton.next_power_of_2(max(1, nope_dim))
     block_rope = triton.next_power_of_2(max(1, rope_dim))
     max_block = max(block_nope, block_rope)
-    # Keep the head-tiled path for compact rows. v15 uses a separate
+    # Keep the head-tiled path for compact rows. v16 uses a separate
     # prefix/suffix organization for wide rows so each kernel carries only one
     # source segment in live state.
     heads_per_program = (
@@ -210,7 +248,23 @@ def concat_and_cast_mha_k(
     )
 
     if k_nope.is_contiguous() and k_rope.is_contiguous():
-        if max_block > 512:
+        if max_block <= 128 and tokens >= 2:
+            _concat_token_contiguous_reuse_rope[(min(32, tokens),)](
+                out,
+                k_nope,
+                k_rope,
+                tokens,
+                heads,
+                nope_dim,
+                rope_dim,
+                COMMON=common,
+                HEAD_TILE=16,
+                BLOCK_NOPE=block_nope,
+                BLOCK_ROPE=block_rope,
+                num_warps=1,
+                num_stages=1,
+            )
+        elif max_block > 512:
             if nope_dim > 0:
                 _concat_nope_contiguous_kernel[(tokens, heads)](
                     out,

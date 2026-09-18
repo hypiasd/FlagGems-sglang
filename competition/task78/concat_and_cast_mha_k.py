@@ -15,6 +15,32 @@ HEADS_PER_PROGRAM = 4
 
 
 @triton.jit
+def _concat_and_cast_mha_k_full_contiguous_kernel(
+    out_ptr,
+    nope_ptr,
+    rope_ptr,
+    HEADS,
+    HEADS_PER_PROGRAM: tl.constexpr,
+    NOPE_DIM: tl.constexpr,
+    ROPE_DIM: tl.constexpr,
+    COMMON: tl.constexpr,
+):
+    """Write complete power-of-two source blocks without column masks."""
+    token = tl.program_id(0)
+    heads = tl.program_id(1) * HEADS_PER_PROGRAM + tl.arange(0, HEADS_PER_PROGRAM)
+    rows = token * HEADS + heads
+    dst = out_ptr + rows[:, None] * (NOPE_DIM + ROPE_DIM)
+    nope_cols = tl.arange(0, NOPE_DIM)
+    rope_cols = tl.arange(0, ROPE_DIM)
+    nope_value = tl.load(
+        nope_ptr + rows[:, None] * NOPE_DIM + nope_cols[None, :]
+    ).to(COMMON)
+    tl.store(dst + nope_cols[None, :], nope_value)
+    rope_value = tl.load(rope_ptr + token * ROPE_DIM + rope_cols).to(COMMON)
+    tl.store(dst + NOPE_DIM + rope_cols[None, :], rope_value[None, :])
+
+
+@triton.jit
 def _concat_and_cast_mha_k_token_pair_contiguous_kernel(
     out_ptr,
     nope_ptr,
@@ -229,7 +255,29 @@ def concat_and_cast_mha_k(
     )
 
     if k_nope.is_contiguous() and k_rope.is_contiguous():
-        if max_block <= 128 and tokens >= 2:
+        full_blocks = (
+            nope_dim > 0
+            and rope_dim > 0
+            and nope_dim == block_nope
+            and rope_dim == block_rope
+            and heads % heads_per_program == 0
+        )
+        if full_blocks:
+            _concat_and_cast_mha_k_full_contiguous_kernel[
+                (tokens, triton.cdiv(heads, heads_per_program))
+            ](
+                out,
+                k_nope,
+                k_rope,
+                HEADS=heads,
+                HEADS_PER_PROGRAM=heads_per_program,
+                NOPE_DIM=nope_dim,
+                ROPE_DIM=rope_dim,
+                COMMON=common,
+                num_warps=num_warps,
+                num_stages=1,
+            )
+        elif max_block <= 128 and tokens >= 2:
             _concat_and_cast_mha_k_token_pair_contiguous_kernel[
                 (triton.cdiv(tokens, 2), triton.cdiv(heads, heads_per_program))
             ](

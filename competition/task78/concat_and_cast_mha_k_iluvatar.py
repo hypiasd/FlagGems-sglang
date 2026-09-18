@@ -15,6 +15,48 @@ HEADS_PER_PROGRAM = 2
 
 
 @triton.jit
+def _concat_token_pair_contiguous(
+    out, nope, rope, TOKENS: tl.constexpr, H: tl.constexpr,
+    DN: tl.constexpr, DR: tl.constexpr,
+    COMMON: tl.constexpr, HEAD_TILE: tl.constexpr,
+    BN: tl.constexpr, BR: tl.constexpr,
+):
+    """Two-token/head-tile mapping with one RoPE load per token."""
+    tokens = tl.program_id(0) * 2 + tl.arange(0, 2)
+    token_mask = tokens < TOKENS
+    rope_cols = tl.arange(0, BR)
+    rope_mask = token_mask[:, None] & (rope_cols[None, :] < DR)
+    rope_value = tl.load(
+        rope + tokens[:, None] * DR + rope_cols[None, :],
+        mask=rope_mask,
+        other=0,
+    ).to(COMMON)
+    for first_head in range(0, H, HEAD_TILE):
+        heads = first_head + tl.arange(0, HEAD_TILE)
+        head_mask = heads < H
+        rows = tokens[:, None] * H + heads[None, :]
+        dst = out + rows[:, :, None] * (DN + DR)
+        if DN > 0:
+            cols = tl.arange(0, BN)
+            mask = token_mask[:, None, None] & head_mask[None, :, None]
+            mask = mask & (cols[None, None, :] < DN)
+            value = tl.load(
+                nope + rows[:, :, None] * DN + cols[None, None, :],
+                mask=mask,
+                other=0,
+            ).to(COMMON)
+            tl.store(dst + cols[None, None, :], value, mask=mask)
+        if DR > 0:
+            mask = token_mask[:, None, None] & head_mask[None, :, None]
+            mask = mask & (rope_cols[None, None, :] < DR)
+            tl.store(
+                dst + DN + rope_cols[None, None, :],
+                rope_value[:, None, :],
+                mask=mask,
+            )
+
+
+@triton.jit
 def _concat_tokens_reuse_rope(
     out, nope, rope, TOKENS: tl.constexpr, H: tl.constexpr,
     DN: tl.constexpr, DR: tl.constexpr,
@@ -255,7 +297,7 @@ def concat_and_cast_mha_k(
 
     if k_nope.is_contiguous() and k_rope.is_contiguous():
         if max_block <= 256 and tokens >= 2:
-            _concat_tokens_reuse_rope[(min(64, tokens),)](
+            _concat_token_pair_contiguous[(triton.cdiv(tokens, 2),)](
                 out,
                 k_nope,
                 k_rope,

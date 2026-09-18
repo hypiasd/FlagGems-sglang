@@ -17,6 +17,46 @@ HEADS_PER_PROGRAM = 4
 
 
 @triton.jit
+def _concat_and_cast_mha_k_row_pair_kernel(
+    out_ptr,
+    nope_ptr,
+    rope_ptr,
+    ROWS,
+    HEADS,
+    NOPE_DIM: tl.constexpr,
+    ROPE_DIM: tl.constexpr,
+    BLOCK_NOPE: tl.constexpr,
+    BLOCK_ROPE: tl.constexpr,
+    COMMON: tl.constexpr,
+):
+    """Two adjacent flattened rows per program, without a persistent loop."""
+    row_pair = tl.program_id(0) * 2 + tl.arange(0, 2)
+    valid = row_pair < ROWS
+    token = row_pair // HEADS
+    dst = out_ptr + row_pair[:, None] * (NOPE_DIM + ROPE_DIM)
+
+    if NOPE_DIM > 0:
+        cols = tl.arange(0, BLOCK_NOPE)
+        mask = valid[:, None] & (cols[None, :] < NOPE_DIM)
+        value = tl.load(
+            nope_ptr + row_pair[:, None] * NOPE_DIM + cols[None, :],
+            mask=mask,
+            other=0,
+        ).to(COMMON)
+        tl.store(dst + cols[None, :], value, mask=mask)
+
+    if ROPE_DIM > 0:
+        cols = tl.arange(0, BLOCK_ROPE)
+        mask = valid[:, None] & (cols[None, :] < ROPE_DIM)
+        value = tl.load(
+            rope_ptr + token[:, None] * ROPE_DIM + cols[None, :],
+            mask=mask,
+            other=0,
+        ).to(COMMON)
+        tl.store(dst + NOPE_DIM + cols[None, :], value, mask=mask)
+
+
+@triton.jit
 def _concat_and_cast_mha_k_persistent_kernel(
     out_ptr,
     nope_ptr,
@@ -214,14 +254,15 @@ def concat_and_cast_mha_k(
     )
 
     if k_nope.is_contiguous() and k_rope.is_contiguous():
-        if tokens >= 4 and max_block <= 512:
-            _concat_and_cast_mha_k_persistent_kernel[(min(64, tokens),)](
+        if max_block <= 512 and tokens * heads >= 2:
+            _concat_and_cast_mha_k_row_pair_kernel[
+                (triton.cdiv(tokens * heads, 2),)
+            ](
                 out,
                 k_nope,
                 k_rope,
-                tokens,
+                tokens * heads,
                 heads,
-                HEADS_PER_PROGRAM=heads_per_program,
                 NOPE_DIM=nope_dim,
                 ROPE_DIM=rope_dim,
                 BLOCK_NOPE=block_nope,
