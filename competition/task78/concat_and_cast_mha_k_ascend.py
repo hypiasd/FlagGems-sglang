@@ -87,9 +87,12 @@ def concat_and_cast_mha_k(k, k_nope, k_rope):
     grid = (min(32, triton.cdiv(rows, bm)),)
     if k_nope.is_contiguous() and k_rope.is_contiguous():
         # Small source tiles can afford a wider head tile and amortize the
-        # persistent token-loop overhead without changing the bounded grid.
+        # persistent token-loop overhead. For tiny blocks, also let each
+        # persistent program cover two tokens while keeping the hard 32 limit.
         head_tile = min(8 if max(bn, br) <= 128 else 4, k.shape[1])
-        _concat_tokens_contiguous[(min(32, tokens),)](
+        token_span = 2 if max(bn, br) <= 128 else 1
+        token_programs = min(32, max(1, triton.cdiv(tokens, token_span)))
+        _concat_tokens_contiguous[(token_programs,)](
             out, k_nope, k_rope, tokens, k.shape[1], dn, dr,
             COMMON=common, HEAD_TILE=head_tile, BN=bn, BR=br, num_warps=4,
         )

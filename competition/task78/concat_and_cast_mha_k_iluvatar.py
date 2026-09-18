@@ -195,6 +195,7 @@ def concat_and_cast_mha_k(
     block_nope = triton.next_power_of_2(max(1, nope_dim))
     block_rope = triton.next_power_of_2(max(1, rope_dim))
     max_block = max(block_nope, block_rope)
+    rows_per_program = 8 if max_block <= 256 else 4
 
     # Tile heads of one token together so the broadcast RoPE segment is loaded
     # once per head tile instead of once per flattened row.
@@ -216,7 +217,7 @@ def concat_and_cast_mha_k(
 
     if k_nope.is_contiguous() and k_rope.is_contiguous():
         if max_block <= 512:
-            _concat_rows_contiguous[(triton.cdiv(tokens * heads, 4),)](
+            _concat_rows_contiguous[(triton.cdiv(tokens * heads, rows_per_program),)](
                 out,
                 k_nope,
                 k_rope,
@@ -227,7 +228,7 @@ def concat_and_cast_mha_k(
                 BLOCK_NOPE=block_nope,
                 BLOCK_ROPE=block_rope,
                 COMMON=common,
-                ROWS_PER_PROGRAM=4,
+                ROWS_PER_PROGRAM=rows_per_program,
                 num_warps=num_warps,
                 num_stages=1,
             )

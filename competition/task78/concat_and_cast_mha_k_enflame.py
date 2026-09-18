@@ -151,12 +151,14 @@ def concat_and_cast_mha_k(
     max_block = max(block_nope, block_rope)
     # v13 tests a wider tile only for the smallest rows. The one-dimensional
     # RoPE load keeps the extra head lanes from multiplying source loads.
+    # v14 widens the low-width regime: one warp can amortize the launch over
+    # 16 heads until the source vector reaches 256 elements.
     heads_per_program = (
-        16 if max_block <= 128
-        else HEADS_PER_PROGRAM if max_block <= 256
+        16 if max_block <= 256
         else 4 if max_block <= 512 else 1
     )
     heads_per_program = 1 if heads == 1 else heads_per_program
+    num_warps = 1 if max_block <= 256 else 2
     common = getattr(
         tl,
         str(torch.promote_types(k_nope.dtype, k_rope.dtype)).split(".")[-1],
@@ -174,7 +176,7 @@ def concat_and_cast_mha_k(
             BLOCK_NOPE=block_nope,
             BLOCK_ROPE=block_rope,
             COMMON=common,
-            num_warps=1,
+            num_warps=num_warps,
             num_stages=1,
         )
     else:
@@ -195,7 +197,7 @@ def concat_and_cast_mha_k(
             BLOCK_NOPE=block_nope,
             BLOCK_ROPE=block_rope,
             COMMON=common,
-            num_warps=1,
+            num_warps=num_warps,
             num_stages=1,
         )
     return out
