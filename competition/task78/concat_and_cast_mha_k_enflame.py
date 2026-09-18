@@ -11,7 +11,7 @@ import triton
 import triton.language as tl
 
 
-ROWS_PER_PROGRAM = 4
+HEADS_PER_PROGRAM = 4
 
 
 @triton.jit
@@ -19,22 +19,22 @@ def _concat_and_cast_mha_k_contiguous_kernel(
     out_ptr,
     nope_ptr,
     rope_ptr,
-    total_rows,
-    HEADS: tl.constexpr,
-    ROWS_PER_PROGRAM: tl.constexpr,
+    HEADS,
+    HEADS_PER_PROGRAM: tl.constexpr,
     NOPE_DIM: tl.constexpr,
     ROPE_DIM: tl.constexpr,
     BLOCK_NOPE: tl.constexpr,
     BLOCK_ROPE: tl.constexpr,
     COMMON: tl.constexpr,
 ):
-    """Contiguous path processing several adjacent rows per program."""
-    rows = tl.program_id(0) * ROWS_PER_PROGRAM + tl.arange(0, ROWS_PER_PROGRAM)
-    row_mask = rows < total_rows
-    token = rows // HEADS
+    """Contiguous path with a regular head tile and no row div/mod."""
+    token = tl.program_id(0)
+    heads = tl.program_id(1) * HEADS_PER_PROGRAM + tl.arange(0, HEADS_PER_PROGRAM)
+    row_mask = heads < HEADS
+    rows = token * HEADS + heads
     out_row = out_ptr + rows[:, None] * (NOPE_DIM + ROPE_DIM)
     nope_row = nope_ptr + rows[:, None] * NOPE_DIM
-    rope_row = rope_ptr + token[:, None] * ROPE_DIM
+    rope_row = rope_ptr + token * ROPE_DIM
 
     if NOPE_DIM > 0:
         nope_cols = tl.arange(0, BLOCK_NOPE)
@@ -148,38 +148,24 @@ def concat_and_cast_mha_k(
     rope_dim = k_rope.shape[-1]
     block_nope = triton.next_power_of_2(max(1, nope_dim))
     block_rope = triton.next_power_of_2(max(1, rope_dim))
-    max_block = max(block_nope, block_rope)
-
-    # Amortize program/address setup on contiguous inputs without changing the
-    # conservative one-row fallback for large tiles or strided inputs.
-    rows = tokens * heads
-    rows_per_program = ROWS_PER_PROGRAM if max_block <= 512 else 1
-    if max_block <= 128:
-        num_warps = 1
-    elif max_block <= 1024:
-        num_warps = 2
-    else:
-        num_warps = 4
-
     common = getattr(
         tl,
         str(torch.promote_types(k_nope.dtype, k_rope.dtype)).split(".")[-1],
     )
 
     if k_nope.is_contiguous() and k_rope.is_contiguous():
-        _concat_and_cast_mha_k_contiguous_kernel[(triton.cdiv(rows, rows_per_program),)](
+        _concat_and_cast_mha_k_contiguous_kernel[(tokens, triton.cdiv(heads, HEADS_PER_PROGRAM))](
             out,
             k_nope,
             k_rope,
-            rows,
             HEADS=heads,
-            ROWS_PER_PROGRAM=rows_per_program,
+            HEADS_PER_PROGRAM=HEADS_PER_PROGRAM,
             NOPE_DIM=nope_dim,
             ROPE_DIM=rope_dim,
             BLOCK_NOPE=block_nope,
             BLOCK_ROPE=block_rope,
             COMMON=common,
-            num_warps=num_warps,
+            num_warps=1,
             num_stages=1,
         )
     else:
@@ -200,7 +186,7 @@ def concat_and_cast_mha_k(
             BLOCK_NOPE=block_nope,
             BLOCK_ROPE=block_rope,
             COMMON=common,
-            num_warps=num_warps,
+            num_warps=1,
             num_stages=1,
         )
     return out

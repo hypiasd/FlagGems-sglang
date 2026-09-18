@@ -45,9 +45,9 @@ def concat_and_cast_mha_k(k, k_nope, k_rope):
     dn, dr = k_nope.shape[2], k_rope.shape[2]
     bn, br = triton.next_power_of_2(max(1, dn)), triton.next_power_of_2(max(1, dr))
     # Bound temporary tile size while amortizing per-row address arithmetic.
-    bm = max(1, min(32, 8192 // max(bn, br)))
+    bm = max(1, min(16, 4096 // max(bn, br)))
     common = getattr(tl, str(torch.promote_types(k_nope.dtype, k_rope.dtype)).split('.')[-1])
-    _concat_rows[(min(48, triton.cdiv(rows, bm)),)](
+    _concat_rows[(min(32, triton.cdiv(rows, bm)),)](
         out, k_nope, k_rope, rows, k.shape[1], dn, dr,
         *k_nope.stride(), k_rope.stride(0), k_rope.stride(2),
         COMMON=common, BM=bm, BN=bn, BR=br, num_warps=4,
