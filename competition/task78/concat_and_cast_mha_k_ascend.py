@@ -38,6 +38,44 @@ def _concat_rows(
 
 
 @triton.jit
+def _concat_tokens_reuse_rope(
+    out, nope, rope, TOKENS: tl.constexpr, H: tl.constexpr,
+    DN: tl.constexpr, DR: tl.constexpr,
+    COMMON: tl.constexpr, HEAD_TILE: tl.constexpr,
+    BN: tl.constexpr, BR: tl.constexpr,
+):
+    """Persistent Ascend path that loads each token's RoPE once."""
+    for token in range(tl.program_id(0), TOKENS, tl.num_programs(0)):
+        rope_cols = tl.arange(0, BR)
+        rope_mask = rope_cols < DR
+        rope_value = tl.load(
+            rope + token * DR + rope_cols,
+            mask=rope_mask,
+            other=0,
+        ).to(COMMON)
+        for first_head in range(0, H, HEAD_TILE):
+            heads = first_head + tl.arange(0, HEAD_TILE)
+            head_mask = heads < H
+            rows = token * H + heads
+            dst = out + rows[:, None] * (DN + DR)
+            if DN > 0:
+                cols = tl.arange(0, BN)
+                mask = head_mask[:, None] & (cols[None, :] < DN)
+                value = tl.load(
+                    nope + rows[:, None] * DN + cols[None, :],
+                    mask,
+                    other=0,
+                ).to(COMMON)
+                tl.store(dst + cols[None, :], value, mask)
+            if DR > 0:
+                tl.store(
+                    dst + DN + rope_cols[None, :],
+                    rope_value[None, :],
+                    head_mask[:, None] & rope_mask[None, :],
+                )
+
+
+@triton.jit
 def _concat_tokens_contiguous(
     out, nope, rope, TOKENS: tl.constexpr, H: tl.constexpr,
     DN: tl.constexpr, DR: tl.constexpr,
@@ -87,15 +125,22 @@ def concat_and_cast_mha_k(k, k_nope, k_rope):
     grid = (min(32, triton.cdiv(rows, bm)),)
     if k_nope.is_contiguous() and k_rope.is_contiguous():
         # Small source tiles can afford a wider head tile and amortize the
-        # persistent token-loop overhead. For tiny blocks, also let each
-        # persistent program cover two tokens while keeping the hard 32 limit.
+        # persistent token-loop overhead. v15's tiny-block path loads RoPE
+        # once per token before walking all head tiles, while the 32-program
+        # bound remains unchanged.
         head_tile = min(8 if max(bn, br) <= 128 else 4, k.shape[1])
         token_span = 2 if max(bn, br) <= 128 else 1
         token_programs = min(32, max(1, triton.cdiv(tokens, token_span)))
-        _concat_tokens_contiguous[(token_programs,)](
-            out, k_nope, k_rope, tokens, k.shape[1], dn, dr,
-            COMMON=common, HEAD_TILE=head_tile, BN=bn, BR=br, num_warps=4,
-        )
+        if max(bn, br) <= 128 and tokens >= 2:
+            _concat_tokens_reuse_rope[(token_programs,)](
+                out, k_nope, k_rope, tokens, k.shape[1], dn, dr,
+                COMMON=common, HEAD_TILE=head_tile, BN=bn, BR=br, num_warps=4,
+            )
+        else:
+            _concat_tokens_contiguous[(token_programs,)](
+                out, k_nope, k_rope, tokens, k.shape[1], dn, dr,
+                COMMON=common, HEAD_TILE=head_tile, BN=bn, BR=br, num_warps=4,
+            )
     else:
         _concat_rows[grid](
             out, k_nope, k_rope, rows, k.shape[1], dn, dr,

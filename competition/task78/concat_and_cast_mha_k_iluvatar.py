@@ -15,6 +15,44 @@ HEADS_PER_PROGRAM = 2
 
 
 @triton.jit
+def _concat_tokens_reuse_rope(
+    out, nope, rope, TOKENS: tl.constexpr, H: tl.constexpr,
+    DN: tl.constexpr, DR: tl.constexpr,
+    COMMON: tl.constexpr, HEAD_TILE: tl.constexpr,
+    BN: tl.constexpr, BR: tl.constexpr,
+):
+    """Token-persistent path that reuses one RoPE load across all heads."""
+    for token in range(tl.program_id(0), TOKENS, tl.num_programs(0)):
+        rope_cols = tl.arange(0, BR)
+        rope_mask = rope_cols < DR
+        rope_value = tl.load(
+            rope + token * DR + rope_cols,
+            mask=rope_mask,
+            other=0,
+        ).to(COMMON)
+        for first_head in range(0, H, HEAD_TILE):
+            heads = first_head + tl.arange(0, HEAD_TILE)
+            head_mask = heads < H
+            rows = token * H + heads
+            dst = out + rows[:, None] * (DN + DR)
+            if DN > 0:
+                cols = tl.arange(0, BN)
+                mask = head_mask[:, None] & (cols[None, :] < DN)
+                value = tl.load(
+                    nope + rows[:, None] * DN + cols[None, :],
+                    mask=mask,
+                    other=0,
+                ).to(COMMON)
+                tl.store(dst + cols[None, :], value, mask=mask)
+            if DR > 0:
+                tl.store(
+                    dst + DN + rope_cols[None, :],
+                    rope_value[None, :],
+                    mask=head_mask[:, None] & rope_mask[None, :],
+                )
+
+
+@triton.jit
 def _concat_rows_contiguous(
     out_ptr,
     nope_ptr,
@@ -28,7 +66,7 @@ def _concat_rows_contiguous(
     COMMON: tl.constexpr,
     ROWS_PER_PROGRAM: tl.constexpr,
 ):
-    """Process four contiguous rows to reduce Iluvatar launch overhead."""
+    """Process a small contiguous row batch to reduce launch overhead."""
     for first in range(
         tl.program_id(0) * ROWS_PER_PROGRAM,
         ROWS,
@@ -216,7 +254,23 @@ def concat_and_cast_mha_k(
     )
 
     if k_nope.is_contiguous() and k_rope.is_contiguous():
-        if max_block <= 512:
+        if max_block <= 256 and tokens >= 2:
+            _concat_tokens_reuse_rope[(min(64, tokens),)](
+                out,
+                k_nope,
+                k_rope,
+                tokens,
+                heads,
+                nope_dim,
+                rope_dim,
+                COMMON=common,
+                HEAD_TILE=4,
+                BN=block_nope,
+                BR=block_rope,
+                num_warps=1,
+                num_stages=1,
+            )
+        elif max_block <= 512:
             _concat_rows_contiguous[(triton.cdiv(tokens * heads, rows_per_program),)](
                 out,
                 k_nope,

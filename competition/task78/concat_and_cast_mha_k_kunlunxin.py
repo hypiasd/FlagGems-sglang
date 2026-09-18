@@ -12,6 +12,44 @@ import triton.language as tl
 
 
 @triton.jit
+def _concat_tokens_contiguous_reuse_rope(
+    out, nope, rope, TOKENS: tl.constexpr, H: tl.constexpr,
+    DN: tl.constexpr, DR: tl.constexpr,
+    COMMON: tl.constexpr, HEAD_TILE: tl.constexpr,
+    BN: tl.constexpr, BR: tl.constexpr,
+):
+    """Token-persistent XPU path loading each RoPE vector once per token."""
+    for token in range(tl.program_id(0), TOKENS, tl.num_programs(0)):
+        rope_cols = tl.arange(0, BR)
+        rope_mask = rope_cols < DR
+        rope_value = tl.load(
+            rope + token * DR + rope_cols,
+            mask=rope_mask,
+            other=0,
+        ).to(COMMON)
+        for first_head in range(0, H, HEAD_TILE):
+            heads = first_head + tl.arange(0, HEAD_TILE)
+            head_mask = heads < H
+            rows = token * H + heads
+            dst = out + rows[:, None] * (DN + DR)
+            if DN > 0:
+                cols = tl.arange(0, BN)
+                mask = head_mask[:, None] & (cols[None, :] < DN)
+                value = tl.load(
+                    nope + rows[:, None] * DN + cols[None, :],
+                    mask=mask,
+                    other=0,
+                ).to(COMMON)
+                tl.store(dst + cols[None, :], value, mask=mask)
+            if DR > 0:
+                tl.store(
+                    dst + DN + rope_cols[None, :],
+                    rope_value[None, :],
+                    mask=head_mask[:, None] & rope_mask[None, :],
+                )
+
+
+@triton.jit
 def _concat_and_cast_mha_k_contiguous_kernel(
     out_ptr,
     nope_ptr,
@@ -146,9 +184,9 @@ def concat_and_cast_mha_k(
     block_nope = triton.next_power_of_2(max(1, nope_dim))
     block_rope = triton.next_power_of_2(max(1, rope_dim))
     max_block = max(block_nope, block_rope)
-    # Keep the contiguous head tile as the stable XPU schedule. v14 only
-    # specializes the single-head tail; the v13 row-batch path regressed the
-    # online score from 0.31x to 0.28x.
+    # Keep the contiguous head tile as the fallback. v15 adds a separate
+    # token-persistent path for small rows so the old row-batch regression is
+    # not reintroduced.
     heads_per_program = (
         1 if heads == 1
         else 4 if max_block <= 512 else 1
@@ -166,20 +204,37 @@ def concat_and_cast_mha_k(
     )
 
     if k_nope.is_contiguous() and k_rope.is_contiguous():
-        _concat_and_cast_mha_k_contiguous_kernel[(tokens, triton.cdiv(heads, heads_per_program))](
-            out,
-            k_nope,
-            k_rope,
-            HEADS=heads,
-            HEADS_PER_PROGRAM=heads_per_program,
-            NOPE_DIM=nope_dim,
-            ROPE_DIM=rope_dim,
-            BLOCK_NOPE=block_nope,
-            BLOCK_ROPE=block_rope,
-            COMMON=common,
-            num_warps=num_warps,
-            num_stages=1,
-        )
+        if max_block <= 256 and tokens >= 2:
+            _concat_tokens_contiguous_reuse_rope[(min(32, tokens),)](
+                out,
+                k_nope,
+                k_rope,
+                tokens,
+                heads,
+                nope_dim,
+                rope_dim,
+                COMMON=common,
+                HEAD_TILE=4,
+                BN=block_nope,
+                BR=block_rope,
+                num_warps=1,
+                num_stages=1,
+            )
+        else:
+            _concat_and_cast_mha_k_contiguous_kernel[(tokens, triton.cdiv(heads, heads_per_program))](
+                out,
+                k_nope,
+                k_rope,
+                HEADS=heads,
+                HEADS_PER_PROGRAM=heads_per_program,
+                NOPE_DIM=nope_dim,
+                ROPE_DIM=rope_dim,
+                BLOCK_NOPE=block_nope,
+                BLOCK_ROPE=block_rope,
+                COMMON=common,
+                num_warps=num_warps,
+                num_stages=1,
+            )
     else:
         _concat_and_cast_mha_k_kernel[(tokens, heads)](
             out,

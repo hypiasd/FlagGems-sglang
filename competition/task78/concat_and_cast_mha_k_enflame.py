@@ -15,6 +15,52 @@ HEADS_PER_PROGRAM = 8
 
 
 @triton.jit
+def _concat_nope_contiguous_kernel(
+    out_ptr,
+    nope_ptr,
+    TOKENS,
+    HEADS,
+    NOPE_DIM: tl.constexpr,
+    ROPE_DIM: tl.constexpr,
+    BLOCK_NOPE: tl.constexpr,
+    COMMON: tl.constexpr,
+):
+    """Wide-row prefix-only copy with no suffix state in registers."""
+    token = tl.program_id(0)
+    head = tl.program_id(1)
+    cols = tl.arange(0, BLOCK_NOPE)
+    mask = cols < NOPE_DIM
+    row = token * HEADS + head
+    value = tl.load(nope_ptr + row * NOPE_DIM + cols, mask=mask, other=0).to(COMMON)
+    tl.store(out_ptr + row * (NOPE_DIM + ROPE_DIM) + cols, value, mask=mask)
+
+
+@triton.jit
+def _concat_rope_contiguous_kernel(
+    out_ptr,
+    rope_ptr,
+    TOKENS,
+    HEADS,
+    NOPE_DIM: tl.constexpr,
+    ROPE_DIM: tl.constexpr,
+    BLOCK_ROPE: tl.constexpr,
+    COMMON: tl.constexpr,
+):
+    """Wide-row suffix-only copy paired with the prefix kernel."""
+    token = tl.program_id(0)
+    head = tl.program_id(1)
+    cols = tl.arange(0, BLOCK_ROPE)
+    mask = cols < ROPE_DIM
+    row = token * HEADS + head
+    value = tl.load(rope_ptr + token * ROPE_DIM + cols, mask=mask, other=0).to(COMMON)
+    tl.store(
+        out_ptr + row * (NOPE_DIM + ROPE_DIM) + NOPE_DIM + cols,
+        value,
+        mask=mask,
+    )
+
+
+@triton.jit
 def _concat_and_cast_mha_k_contiguous_kernel(
     out_ptr,
     nope_ptr,
@@ -149,10 +195,9 @@ def concat_and_cast_mha_k(
     block_nope = triton.next_power_of_2(max(1, nope_dim))
     block_rope = triton.next_power_of_2(max(1, rope_dim))
     max_block = max(block_nope, block_rope)
-    # v13 tests a wider tile only for the smallest rows. The one-dimensional
-    # RoPE load keeps the extra head lanes from multiplying source loads.
-    # v14 widens the low-width regime: one warp can amortize the launch over
-    # 16 heads until the source vector reaches 256 elements.
+    # Keep the head-tiled path for compact rows. v15 uses a separate
+    # prefix/suffix organization for wide rows so each kernel carries only one
+    # source segment in live state.
     heads_per_program = (
         16 if max_block <= 256
         else 4 if max_block <= 512 else 1
@@ -165,20 +210,48 @@ def concat_and_cast_mha_k(
     )
 
     if k_nope.is_contiguous() and k_rope.is_contiguous():
-        _concat_and_cast_mha_k_contiguous_kernel[(tokens, triton.cdiv(heads, heads_per_program))](
-            out,
-            k_nope,
-            k_rope,
-            HEADS=heads,
-            HEADS_PER_PROGRAM=heads_per_program,
-            NOPE_DIM=nope_dim,
-            ROPE_DIM=rope_dim,
-            BLOCK_NOPE=block_nope,
-            BLOCK_ROPE=block_rope,
-            COMMON=common,
-            num_warps=num_warps,
-            num_stages=1,
-        )
+        if max_block > 512:
+            if nope_dim > 0:
+                _concat_nope_contiguous_kernel[(tokens, heads)](
+                    out,
+                    k_nope,
+                    tokens,
+                    heads,
+                    NOPE_DIM=nope_dim,
+                    ROPE_DIM=rope_dim,
+                    BLOCK_NOPE=block_nope,
+                    COMMON=common,
+                    num_warps=num_warps,
+                    num_stages=1,
+                )
+            if rope_dim > 0:
+                _concat_rope_contiguous_kernel[(tokens, heads)](
+                    out,
+                    k_rope,
+                    tokens,
+                    heads,
+                    NOPE_DIM=nope_dim,
+                    ROPE_DIM=rope_dim,
+                    BLOCK_ROPE=block_rope,
+                    COMMON=common,
+                    num_warps=num_warps,
+                    num_stages=1,
+                )
+        else:
+            _concat_and_cast_mha_k_contiguous_kernel[(tokens, triton.cdiv(heads, heads_per_program))](
+                out,
+                k_nope,
+                k_rope,
+                HEADS=heads,
+                HEADS_PER_PROGRAM=heads_per_program,
+                NOPE_DIM=nope_dim,
+                ROPE_DIM=rope_dim,
+                BLOCK_NOPE=block_nope,
+                BLOCK_ROPE=block_rope,
+                COMMON=common,
+                num_warps=num_warps,
+                num_stages=1,
+            )
     else:
         _concat_and_cast_mha_k_kernel[(tokens, heads)](
             out,
