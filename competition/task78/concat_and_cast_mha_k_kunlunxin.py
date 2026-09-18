@@ -1,378 +1,73 @@
-"""Triton implementation for Task 78: concat_and_cast_mha_k.
+"""Task 78 v18: Kunlunxin, dense segment jobs in one launch.
 
-The reference implementation materializes an expanded RoPE tensor, performs a
-concatenation, and finally casts into the destination cache dtype.  This
-kernel writes the destination directly: each program owns one ``(token,
-head)`` row and copies the NoPE prefix followed by the broadcast RoPE suffix.
+NoPE and RoPE jobs never mix source pointer types or use 3-D broadcasts.
+PyTorch only allocates output and determines the reference promotion dtype.
 """
-
 import torch
 import triton
 import triton.language as tl
 
 
 @triton.jit
-def _concat_nope_contiguous_kernel(
-    out,
-    nope,
-    HEADS,
-    NOPE_DIM: tl.constexpr,
-    ROPE_DIM: tl.constexpr,
-    BLOCK_NOPE: tl.constexpr,
-    COMMON: tl.constexpr,
+def _concat_segment_jobs_v18(
+    out, nope, rope,
+    T: tl.constexpr, H: tl.constexpr, DN: tl.constexpr, DR: tl.constexpr,
+    NS0: tl.constexpr, NS1: tl.constexpr, NS2: tl.constexpr,
+    RS0: tl.constexpr, RS2: tl.constexpr,
+    COMMON: tl.constexpr, CONTIGUOUS: tl.constexpr,
+    BLOCK: tl.constexpr, PREFIX_JOBS: tl.constexpr, TOTAL_JOBS: tl.constexpr,
 ):
-    """Simple XPU prefix copy used as the first half of the split path."""
-    token = tl.program_id(0)
-    head = tl.program_id(1)
-    row = token * HEADS + head
-    cols = tl.arange(0, BLOCK_NOPE)
-    mask = cols < NOPE_DIM
-    value = tl.load(nope + row * NOPE_DIM + cols, mask=mask, other=0).to(COMMON)
-    tl.store(out + row * (NOPE_DIM + ROPE_DIM) + cols, value, mask=mask)
-
-
-@triton.jit
-def _concat_rope_contiguous_kernel(
-    out,
-    rope,
-    HEADS,
-    NOPE_DIM: tl.constexpr,
-    ROPE_DIM: tl.constexpr,
-    BLOCK_ROPE: tl.constexpr,
-    COMMON: tl.constexpr,
-):
-    """Simple XPU suffix copy used as the second half of the split path."""
-    token = tl.program_id(0)
-    head = tl.program_id(1)
-    row = token * HEADS + head
-    cols = tl.arange(0, BLOCK_ROPE)
-    mask = cols < ROPE_DIM
-    value = tl.load(rope + token * ROPE_DIM + cols, mask=mask, other=0).to(COMMON)
-    tl.store(
-        out + row * (NOPE_DIM + ROPE_DIM) + NOPE_DIM + cols,
-        value,
-        mask=mask,
-    )
-
-
-@triton.jit
-def _concat_token_pair_contiguous_v17(
-    out,
-    nope,
-    rope,
-    TOKENS: tl.constexpr,
-    H: tl.constexpr,
-    DN: tl.constexpr,
-    DR: tl.constexpr,
-    COMMON: tl.constexpr,
-    HEAD_TILE: tl.constexpr,
-    BN: tl.constexpr,
-    BR: tl.constexpr,
-):
-    """Two-token/head-tile mapping without a token-persistent loop."""
-    tokens = tl.program_id(0) * 2 + tl.arange(0, 2)
-    token_mask = tokens < TOKENS
-    heads = tl.program_id(1) * HEAD_TILE + tl.arange(0, HEAD_TILE)
-    head_mask = heads < H
-    rows = tokens[:, None] * H + heads[None, :]
-    dst = out + rows[:, :, None] * (DN + DR)
-
+    """Copy actual elements packed across rows; prefix/suffix stores are disjoint."""
+    job = tl.program_id(0)
     if DN > 0:
-        cols = tl.arange(0, BN)
-        mask = token_mask[:, None, None] & head_mask[None, :, None]
-        mask = mask & (cols[None, None, :] < DN)
-        value = tl.load(
-            nope + rows[:, :, None] * DN + cols[None, None, :],
-            mask=mask,
-            other=0,
-        ).to(COMMON)
-        tl.store(dst + cols[None, None, :], value, mask=mask)
-
+        if job < PREFIX_JOBS:
+            offsets = job.to(tl.int64) * BLOCK + tl.arange(0, BLOCK)
+            row = offsets // DN
+            col = offsets % DN
+            valid = offsets < T * H * DN
+            if CONTIGUOUS:
+                src = offsets
+            else:
+                src = (row // H) * NS0 + (row % H) * NS1 + col * NS2
+            value = tl.load(nope + src, mask=valid, other=0).to(COMMON)
+            tl.store(out + row * (DN + DR) + col, value, mask=valid)
     if DR > 0:
-        cols = tl.arange(0, BR)
-        rope_mask = token_mask[:, None] & (cols[None, :] < DR)
-        value = tl.load(
-            rope + tokens[:, None] * DR + cols[None, :],
-            mask=rope_mask,
-            other=0,
-        ).to(COMMON)
-        mask = token_mask[:, None, None] & head_mask[None, :, None]
-        mask = mask & (cols[None, None, :] < DR)
-        tl.store(dst + DN + cols[None, None, :], value[:, None, :], mask=mask)
+        if job >= PREFIX_JOBS:
+            offsets = (job.to(tl.int64) - PREFIX_JOBS) * BLOCK + tl.arange(0, BLOCK)
+            row = offsets // DR
+            col = offsets % DR
+            valid = offsets < T * H * DR
+            if CONTIGUOUS:
+                src = (row // H) * DR + col
+            else:
+                src = (row // H) * RS0 + col * RS2
+            value = tl.load(rope + src, mask=valid, other=0).to(COMMON)
+            tl.store(out + row * (DN + DR) + DN + col, value, mask=valid)
 
 
-@triton.jit
-def _concat_tokens_contiguous_reuse_rope(
-    out, nope, rope, TOKENS: tl.constexpr, H: tl.constexpr,
-    DN: tl.constexpr, DR: tl.constexpr,
-    COMMON: tl.constexpr, HEAD_TILE: tl.constexpr,
-    BN: tl.constexpr, BR: tl.constexpr,
-):
-    """Token-persistent XPU path loading each RoPE vector once per token."""
-    for token in range(tl.program_id(0), TOKENS, tl.num_programs(0)):
-        rope_cols = tl.arange(0, BR)
-        rope_mask = rope_cols < DR
-        rope_value = tl.load(
-            rope + token * DR + rope_cols,
-            mask=rope_mask,
-            other=0,
-        ).to(COMMON)
-        for first_head in range(0, H, HEAD_TILE):
-            heads = first_head + tl.arange(0, HEAD_TILE)
-            head_mask = heads < H
-            rows = token * H + heads
-            dst = out + rows[:, None] * (DN + DR)
-            if DN > 0:
-                cols = tl.arange(0, BN)
-                mask = head_mask[:, None] & (cols[None, :] < DN)
-                value = tl.load(
-                    nope + rows[:, None] * DN + cols[None, :],
-                    mask=mask,
-                    other=0,
-                ).to(COMMON)
-                tl.store(dst + cols[None, :], value, mask=mask)
-            if DR > 0:
-                tl.store(
-                    dst + DN + rope_cols[None, :],
-                    rope_value[None, :],
-                    mask=head_mask[:, None] & rope_mask[None, :],
-                )
-
-
-@triton.jit
-def _concat_and_cast_mha_k_contiguous_kernel(
-    out_ptr,
-    nope_ptr,
-    rope_ptr,
-    HEADS,
-    HEADS_PER_PROGRAM: tl.constexpr,
-    NOPE_DIM: tl.constexpr,
-    ROPE_DIM: tl.constexpr,
-    BLOCK_NOPE: tl.constexpr,
-    BLOCK_ROPE: tl.constexpr,
-    COMMON: tl.constexpr,
-):
-    """Contiguous path reusing the broadcast RoPE load across a head tile."""
-    token = tl.program_id(0)
-    heads = tl.program_id(1) * HEADS_PER_PROGRAM + tl.arange(0, HEADS_PER_PROGRAM)
-    row_mask = heads < HEADS
-    rows = token * HEADS + heads
-    out_row = out_ptr + rows[:, None] * (NOPE_DIM + ROPE_DIM)
-    nope_row = nope_ptr + rows[:, None] * NOPE_DIM
-    rope_row = rope_ptr + token * ROPE_DIM
-
-    if NOPE_DIM > 0:
-        nope_cols = tl.arange(0, BLOCK_NOPE)
-        nope_mask = row_mask[:, None] & (nope_cols[None, :] < NOPE_DIM)
-        nope_value = tl.load(
-            nope_row + nope_cols,
-            mask=nope_mask,
-            other=0,
-        ).to(COMMON)
-        tl.store(out_row + nope_cols, nope_value, mask=nope_mask)
-
-    if ROPE_DIM > 0:
-        rope_cols = tl.arange(0, BLOCK_ROPE)
-        rope_mask = rope_cols < ROPE_DIM
-        rope_value = tl.load(
-            rope_row + rope_cols,
-            mask=rope_mask,
-            other=0,
-        ).to(COMMON)
-        tl.store(
-            out_row + NOPE_DIM + rope_cols[None, :],
-            rope_value[None, :],
-            mask=row_mask[:, None] & rope_mask[None, :],
-        )
-
-
-@triton.jit
-def _concat_and_cast_mha_k_kernel(
-    out_ptr,
-    nope_ptr,
-    rope_ptr,
-    out_s0,
-    out_s1,
-    out_s2,
-    nope_s0,
-    nope_s1,
-    nope_s2,
-    rope_s0,
-    rope_s2,
-    NOPE_DIM: tl.constexpr,
-    ROPE_DIM: tl.constexpr,
-    BLOCK_NOPE: tl.constexpr,
-    BLOCK_ROPE: tl.constexpr,
-    COMMON: tl.constexpr,
-):
-    """Copy one token/head row through two regular contiguous segments.
-
-    Keeping the prefix and suffix as independent load/store pairs avoids the
-    mixed masked loads and data-dependent pointer selection in the baseline.
-    The source values are promoted before the final store so this still has
-    the reference ``cat -> to(k.dtype)`` dtype semantics when the two inputs
-    have different dtypes.
-    """
-    token = tl.program_id(0)
-    head = tl.program_id(1)
-    out_row = out_ptr + token * out_s0 + head * out_s1
-
-    if NOPE_DIM > 0:
-        nope_cols = tl.arange(0, BLOCK_NOPE)
-        nope_mask = nope_cols < NOPE_DIM
-        nope_value = tl.load(
-            nope_ptr
-            + token * nope_s0
-            + head * nope_s1
-            + nope_cols * nope_s2,
-            mask=nope_mask,
-            other=0,
-        ).to(COMMON)
-        tl.store(
-            out_row + nope_cols * out_s2,
-            nope_value,
-            mask=nope_mask,
-        )
-
-    if ROPE_DIM > 0:
-        rope_cols = tl.arange(0, BLOCK_ROPE)
-        rope_mask = rope_cols < ROPE_DIM
-        rope_value = tl.load(
-            rope_ptr + token * rope_s0 + rope_cols * rope_s2,
-            mask=rope_mask,
-            other=0,
-        ).to(COMMON)
-        tl.store(
-            out_row + (NOPE_DIM + rope_cols) * out_s2,
-            rope_value,
-            mask=rope_mask,
-        )
-
-
-def concat_and_cast_mha_k(
-    k: torch.Tensor,
-    k_nope: torch.Tensor,
-    k_rope: torch.Tensor,
-) -> torch.Tensor:
-    """Build ``k`` from per-head NoPE and single-head broadcast RoPE data."""
-    tokens, heads, total_dim = k.shape
-    # ``torch.cat(...).to(...)`` in the reference produces a contiguous
-    # result.  Do not inherit a vendor-specific/non-contiguous layout from
-    # the shape-and-dtype carrier ``k``: NPU exact comparison checks layout
-    # independently of strides.
+def concat_and_cast_mha_k(k, k_nope, k_rope):
     out = torch.empty(
-        k.shape,
-        dtype=k.dtype,
-        device=k.device,
+        k.shape, dtype=k.dtype, device=k.device,
         memory_format=torch.contiguous_format,
     )
+    tokens, heads, total_dim = k.shape
     if tokens == 0 or heads == 0 or total_dim == 0:
         return out
-
-    nope_dim = k_nope.shape[-1]
-    rope_dim = k_rope.shape[-1]
-    block_nope = triton.next_power_of_2(max(1, nope_dim))
-    block_rope = triton.next_power_of_2(max(1, rope_dim))
-    max_block = max(block_nope, block_rope)
-    # Keep the contiguous head tile as the fallback. v16 uses a separate
-    # prefix/suffix organization for small and medium rows so the v15
-    # token-persistent failure is not reintroduced.
-    heads_per_program = (
-        1 if heads == 1
-        else 4 if max_block <= 512 else 1
-    )
-    if max_block <= 128:
-        num_warps = 1
-    elif max_block <= 1024:
-        num_warps = 2
-    else:
-        num_warps = 4
-
+    dn, dr = k_nope.shape[2], k_rope.shape[2]
     common = getattr(
-        tl,
-        str(torch.promote_types(k_nope.dtype, k_rope.dtype)).split(".")[-1],
+        tl, str(torch.promote_types(k_nope.dtype, k_rope.dtype)).split(".")[-1],
     )
-
-    if k_nope.is_contiguous() and k_rope.is_contiguous():
-        if max_block <= 256 and tokens >= 2:
-            _concat_token_pair_contiguous_v17[
-                (triton.cdiv(tokens, 2), triton.cdiv(heads, 4))
-            ](
-                out,
-                k_nope,
-                k_rope,
-                tokens,
-                heads,
-                nope_dim,
-                rope_dim,
-                COMMON=common,
-                HEAD_TILE=4,
-                BN=block_nope,
-                BR=block_rope,
-                num_warps=1,
-                num_stages=1,
-            )
-        elif max_block <= 512:
-            if nope_dim > 0:
-                _concat_nope_contiguous_kernel[(tokens, heads)](
-                    out,
-                    k_nope,
-                    heads,
-                    NOPE_DIM=nope_dim,
-                    ROPE_DIM=rope_dim,
-                    BLOCK_NOPE=block_nope,
-                    COMMON=common,
-                    num_warps=1,
-                    num_stages=1,
-                )
-            if rope_dim > 0:
-                _concat_rope_contiguous_kernel[(tokens, heads)](
-                    out,
-                    k_rope,
-                    heads,
-                    NOPE_DIM=nope_dim,
-                    ROPE_DIM=rope_dim,
-                    BLOCK_ROPE=block_rope,
-                    COMMON=common,
-                    num_warps=1,
-                    num_stages=1,
-                )
-        else:
-            _concat_and_cast_mha_k_contiguous_kernel[(tokens, triton.cdiv(heads, heads_per_program))](
-                out,
-                k_nope,
-                k_rope,
-                HEADS=heads,
-                HEADS_PER_PROGRAM=heads_per_program,
-                NOPE_DIM=nope_dim,
-                ROPE_DIM=rope_dim,
-                BLOCK_NOPE=block_nope,
-                BLOCK_ROPE=block_rope,
-                COMMON=common,
-                num_warps=num_warps,
-                num_stages=1,
-            )
-    else:
-        _concat_and_cast_mha_k_kernel[(tokens, heads)](
-            out,
-            k_nope,
-            k_rope,
-            out.stride(0),
-            out.stride(1),
-            out.stride(2),
-            k_nope.stride(0),
-            k_nope.stride(1),
-            k_nope.stride(2),
-            k_rope.stride(0),
-            k_rope.stride(2),
-            NOPE_DIM=nope_dim,
-            ROPE_DIM=rope_dim,
-            BLOCK_NOPE=block_nope,
-            BLOCK_ROPE=block_rope,
-            COMMON=common,
-            num_warps=num_warps,
-            num_stages=1,
-        )
+    block = 512
+    prefix_jobs = triton.cdiv(tokens * heads * dn, block)
+    jobs = prefix_jobs + triton.cdiv(tokens * heads * dr, block)
+    _concat_segment_jobs_v18[(jobs,)](
+        out, k_nope, k_rope, tokens, heads, dn, dr,
+        *k_nope.stride(), k_rope.stride(0), k_rope.stride(2),
+        COMMON=common,
+        CONTIGUOUS=k_nope.is_contiguous() and k_rope.is_contiguous(),
+        BLOCK=block, PREFIX_JOBS=prefix_jobs, TOTAL_JOBS=jobs,
+        num_warps=1, num_stages=1,
+    )
     return out
 
 

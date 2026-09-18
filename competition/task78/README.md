@@ -1,16 +1,21 @@
 # Task 78: `concat_and_cast_mha_k`
 
-The submission entry is `concat_and_cast_mha_k` in
-`concat_and_cast_mha_k.py`. It fuses the reference sequence
-`expand -> cat -> cast` into one Triton kernel and writes directly to the
-destination tensor.
+Current candidate: [v18 design and per-chip matrix](v18/README.md).
+Submission package: `flagos-task78-v18.zip`, containing the seven operator
+files in this directory. All files expose `concat_and_cast_mha_k(k, k_nope, k_rope)`.
 
-The generic implementation is a cross-chip row-tiled kernel. It keeps the
-NoPE prefix and broadcast RoPE suffix as two regular load/store segments in
-one Triton program, avoiding mixed masked loads and data-dependent pointer
-selection. The current `v5`/`v6` Ascend companion remains available as a
-separate submission experiment, but the generic path is the primary candidate
-for testing whether one portable kernel is sufficient.
+v17 finished with 7/8 (Kunlunxin failed); the last complete run was v16 at
+1.18x. The best complete recorded run remains v12 at 1.27x.
 
-Real performance must be measured on the eight FlagOS target chips; this
-checkout is on an Apple M3 and cannot replace those measurements.
+v18 uses one launch per nonempty call: dense segment jobs, hybrid dense NoPE
+and broadcast RoPE jobs, or Hygon's serial two-token tiles. Ascend caps the
+entire one-dimensional persistent grid at 32 programs. All variants preserve
+cat-then-cast dtype promotion and support strided input tensors.
+
+Run `python3 competition/task78/validate_cpu.py --all` from the repository
+root for direct-source CPU semantic checks. This does not compile Triton or
+prove device performance. The local [validation record](v18/validation.md)
+contains the tested source hashes and results.
+
+Historical version directories and ZIPs remain reproducible references.
+The user uploads candidates to FlagOS for real eight-chip evaluation.
