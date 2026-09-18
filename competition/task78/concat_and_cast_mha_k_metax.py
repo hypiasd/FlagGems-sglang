@@ -48,16 +48,16 @@ def _concat_and_cast_mha_k_contiguous_kernel(
 
     if ROPE_DIM > 0:
         rope_cols = tl.arange(0, BLOCK_ROPE)
-        rope_mask = row_mask[:, None] & (rope_cols[None, :] < ROPE_DIM)
+        rope_mask = rope_cols < ROPE_DIM
         rope_value = tl.load(
-            rope_row + rope_cols[None, :],
+            rope_row + rope_cols,
             mask=rope_mask,
             other=0,
         ).to(COMMON)
         tl.store(
-            out_row + NOPE_DIM + rope_cols,
-            rope_value,
-            mask=rope_mask,
+            out_row + NOPE_DIM + rope_cols[None, :],
+            rope_value[None, :],
+            mask=row_mask[:, None] & rope_mask[None, :],
         )
 
 

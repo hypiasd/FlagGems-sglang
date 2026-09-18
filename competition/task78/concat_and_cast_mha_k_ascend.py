@@ -61,12 +61,16 @@ def _concat_tokens_contiguous(
                 tl.store(out + dst[:, None] + cols[None, :], value, mask)
             if DR > 0:
                 cols = tl.arange(0, BR)
-                mask = head_mask[:, None] & (cols[None, :] < DR)
+                rope_mask = cols < DR
                 value = tl.load(
-                    rope + token * DR + cols[None, :],
-                    mask, other=0,
+                    rope + token * DR + cols,
+                    rope_mask, other=0,
                 ).to(COMMON)
-                tl.store(out + dst[:, None] + DN + cols[None, :], value, mask)
+                tl.store(
+                    out + dst[:, None] + DN + cols[None, :],
+                    value[None, :],
+                    head_mask[:, None] & rope_mask[None, :],
+                )
 
 
 def concat_and_cast_mha_k(k, k_nope, k_rope):
