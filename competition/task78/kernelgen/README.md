@@ -77,15 +77,21 @@ Every new version follows six separate stages:
    backend-specific structural objective. Generated source goes only into the
    new candidate directory. A response without usable code is rejected.
 3. **Deterministic hard gate** — run syntax, forbidden-pattern, launch-config,
-   runtime-branch, tile-bound, and known backend-risk checks. This stage can
-   reject a candidate but cannot certify it.
+   runtime-branch, tile-bound, portable `triton.Config` ABI, autotune launch
+   binding, masked-pointer, scalar-mask, and config-dependent coverage checks.
+   This stage can reject a candidate but cannot certify it.
 4. **Semantic gate** — run the isolated 189-case CPU memory/semantic suite and
-   require all seven backend files to pass. CPU success is recorded separately
-   from compiler evidence; failures return to KernelGen repair before review.
+   require all seven backend files to pass. When a file uses `@triton.autotune`,
+   run all cases for the first config and a boundary/stride/empty-case suite
+   for every remaining config; use the slower full sweep for release audits.
+   CPU success is recorded separately from compiler evidence; failures return
+   to KernelGen repair before review.
 5. **Adversarial sub-agent review** — give the semantically passing candidate
    and hard-gate report to the sub-agent using `subagent_review_prompt.md`. The
    sub-agent must look for risks outside the hard-coded rules and label each
-   finding with exact evidence. It may not edit the candidate.
+   finding with exact evidence. Any unresolved `novel_findings` blocks
+   promotion; the reviewer cannot waive a risk merely because the local CPU
+   model passes. It may not edit the candidate.
 6. **Promotion/Arc** — package only when stages 3–5 pass. Arc is the only
    source of target compilation and performance evidence. A failure feeds its
    exact error back into a new KernelGen repair call; it is never patched
@@ -126,7 +132,9 @@ Run from the repository root before promoting a candidate:
 
 ```bash
 python3 -m py_compile competition/task78/kernelgen/candidates/<RUN_ID>/*.py
-python3 competition/task78/validate_cpu.py --source-dir competition/task78/kernelgen/candidates/<RUN_ID> --all
+python3 competition/task78/validate_cpu.py --source-dir competition/task78/kernelgen/candidates/<RUN_ID> --all --autotune-sweep
+# Release audit (optional, slower):
+python3 competition/task78/validate_cpu.py --source-dir competition/task78/kernelgen/candidates/<RUN_ID> --all --autotune-sweep-full
 python3 competition/task78/kernelgen/run_candidate_gate.py \
   competition/task78/kernelgen/candidates/<RUN_ID> \
   --require-review \
@@ -146,8 +154,11 @@ python3 competition/task78/kernelgen/review_candidate.py \
 The candidate gate also runs this scan automatically. Passing an old
 `subagent-review.json` cannot bypass a newly discovered compiler-risk rule.
 The scan currently blocks runtime JIT branches, uncapped tile powers,
-non-power-of-two or unproven `num_warps`, and the Hygon 1-D load-cast followed
-by broadcast pattern that failed in the v22 Arc run.
+non-power-of-two or unproven `num_warps`, non-portable `triton.Config` options,
+explicit tile constexpr kwargs on autotuned launches, masked negative pointer
+arithmetic, implicit scalar-mask broadcasting, autotune tile/grid mismatches,
+and the Hygon 1-D load-cast followed by broadcast pattern that failed in the
+v22 Arc run.
 
 Then send the candidate, `static-review.json`, and
 [`subagent_review_prompt.md`](subagent_review_prompt.md) to a read-only
@@ -177,7 +188,10 @@ with this shape:
 ```
 
 The sub-agent is not trusted as a compiler or benchmark. Its receipt is a
-mandatory review checkpoint, and `blockers` must be empty before packaging.
+mandatory review checkpoint, `blockers` must be empty, and every
+`novel_findings` list must also be empty before packaging. A novel finding is a
+request for KernelGen repair or target smoke evidence, not a comment to carry
+silently into Arc.
 `status` must be one of `pass`, `fail`, or `unknown`; every backend must state
 what evidence supports the status and keep `novel_findings` separate from
 rule-confirmed findings. An unverified target compiler is recorded as
@@ -186,14 +200,18 @@ evidence, not silently treated as a pass. The deterministic scan runs inside
 The gate also compares every receipt hash with the current seven source files,
 and requires `candidate` to equal the candidate directory name, so a review
 cannot be reused after the candidate changes or copied between runs.
-The deterministic scan catches known high-risk patterns (runtime JIT control
-flow and uncapped tile powers); the sub-agent checks branch shapes, implicit
-broadcasts, pointer/mask safety, and whether the structural change is real.
+The deterministic scan catches known high-risk patterns (including target ABI
+and autotune consistency); the sub-agent checks branch shapes, implicit
+broadcasts, pointer/mask safety, and whether the structural change is real. The
+sub-agent is deliberately a discovery layer, not just a checklist: if it finds
+a credible new class of risk, the candidate stops at the gate.
 The target compiler/device gate remains necessary.
 
 The candidate gate checks all seven files, the exact public entry, forbidden
-fallbacks/native concatenation, Python syntax, and the full 189-case CPU
-semantic suite and—when `--require-review` is used—a passing sub-agent receipt.
+fallbacks/native concatenation, the 189-case CPU semantic suite plus the
+autotune boundary sweep, and—when `--require-review` is used—a passing
+sub-agent receipt with no unresolved novel findings. The full per-config sweep
+is available as a slower release audit.
 `validate_cpu.py --source-dir` makes the validator operate on
 an isolated candidate directory instead of silently reading the root baseline.
 Known autotune/cache-hint syntax is ignored only by the CPU model; target

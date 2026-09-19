@@ -98,6 +98,13 @@ def review_check(review_path: Path | None, required: bool,
         and all(observed_hashes.get(backend) == digest
                 for backend, digest in expected_hashes.items())
     )
+    novel_findings = []
+    if findings_shape_valid:
+        for backend in expected_hashes:
+            novel_findings.extend(
+                {"backend": backend, **item}
+                for item in findings[backend]["novel_findings"]
+            )
     passed = (
         review.get("review_type") == "read-only-subagent"
         and review.get("review_mode") == "adversarial-read-only"
@@ -107,6 +114,7 @@ def review_check(review_path: Path | None, required: bool,
         and findings_shape_valid
         and isinstance(blockers, list)
         and not blockers
+        and not novel_findings
         and hashes_match
     )
     return {
@@ -115,6 +123,8 @@ def review_check(review_path: Path | None, required: bool,
         "passed": bool(passed),
         "path": str(review_path),
         "blocker_count": len(blockers) if isinstance(blockers, list) else None,
+        "novel_finding_count": len(novel_findings),
+        "novel_findings": novel_findings,
         "findings_shape_valid": findings_shape_valid,
         "candidate_match": candidate_match,
         "hashes_match": hashes_match,
@@ -148,25 +158,10 @@ def main(argv=None) -> int:
             result = {"path": str(path), "syntax": False, "error": str(exc)}
         static.append(result)
 
-    with tempfile.NamedTemporaryFile(prefix="task78-gate-", suffix=".json", delete=False) as handle:
-        validator_json = Path(handle.name)
-    command = [
-        sys.executable,
-        str(Path(__file__).resolve().parents[1] / "validate_cpu.py"),
-        "--source-dir",
-        str(source_dir),
-        "--json",
-        str(validator_json),
-        "--all",
-    ]
-    completed = subprocess.run(command, text=True, capture_output=True)
-    try:
-        semantic = json.loads(validator_json.read_text(encoding="utf-8"))
-    except Exception as exc:
-        semantic = {"passed": False, "error": f"validator did not produce JSON: {exc}"}
-    finally:
-        validator_json.unlink(missing_ok=True)
-
+    # Run the cheap deterministic compiler-risk scan before the expensive CPU
+    # matrix.  A known ABI/pointer/autotune blocker should stop immediately,
+    # rather than spending minutes validating a candidate that cannot be
+    # promoted anyway.
     with tempfile.NamedTemporaryFile(prefix="task78-review-", suffix=".json", delete=False) as handle:
         compiler_review_json = Path(handle.name)
     compiler_review_command = [
@@ -195,6 +190,38 @@ def main(argv=None) -> int:
             )
         compiler_review_json.unlink(missing_ok=True)
 
+    compiler_review_passed = (
+        compiler_review.get("passed") is True
+        and compiler_review_completed.returncode == 0
+    )
+    if compiler_review_passed:
+        with tempfile.NamedTemporaryFile(prefix="task78-gate-", suffix=".json", delete=False) as handle:
+            validator_json = Path(handle.name)
+        command = [
+            sys.executable,
+            str(Path(__file__).resolve().parents[1] / "validate_cpu.py"),
+            "--source-dir",
+            str(source_dir),
+            "--json",
+            str(validator_json),
+            "--all",
+            "--autotune-sweep",
+        ]
+        completed = subprocess.run(command, text=True, capture_output=True)
+        try:
+            semantic = json.loads(validator_json.read_text(encoding="utf-8"))
+        except Exception as exc:
+            semantic = {"passed": False, "error": f"validator did not produce JSON: {exc}"}
+        finally:
+            validator_json.unlink(missing_ok=True)
+    else:
+        completed = None
+        semantic = {
+            "passed": False,
+            "skipped": True,
+            "reason": "deterministic compiler-risk scan failed; semantic matrix not run",
+        }
+
     static_passed = (
         not missing
         and len(static) == len(BACKENDS)
@@ -212,11 +239,10 @@ def main(argv=None) -> int:
     passed = (
         static_passed
         and semantic.get("passed") is True
-        and completed.returncode == 0
-        and compiler_review.get("passed") is True
-        and compiler_review_completed.returncode == 0
+        and compiler_review_passed
         and review["passed"]
     )
+    validator_returncode = completed.returncode if completed is not None else None
     result = {
         "passed": passed,
         "source_dir": str(source_dir),
@@ -225,7 +251,7 @@ def main(argv=None) -> int:
         "semantic": semantic,
         "compiler_review": compiler_review,
         "review": review,
-        "validator_returncode": completed.returncode,
+        "validator_returncode": validator_returncode,
         "compiler_review_returncode": compiler_review_completed.returncode,
         "notice": "Local gate only; target compiler/device and performance remain unverified.",
     }
@@ -233,9 +259,9 @@ def main(argv=None) -> int:
         args.json_path.parent.mkdir(parents=True, exist_ok=True)
         args.json_path.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(result, ensure_ascii=False, indent=2))
-    if not passed and completed.stdout:
+    if completed is not None and not passed and completed.stdout:
         print("\n--- validator stdout ---\n" + completed.stdout, file=sys.stderr)
-    if completed.stderr:
+    if completed is not None and completed.stderr:
         print("\n--- validator stderr ---\n" + completed.stderr, file=sys.stderr)
     return 0 if passed else 1
 

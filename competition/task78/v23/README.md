@@ -23,4 +23,7 @@ site reports no average acceleration. Target-specific behavior is documented
 in [validation.md](validation.md).
 
 See [validation.md](validation.md) for hashes, gate results, and the remaining
-risks reported by the independent review.
+risks reported by the independent review. The post-v23 audit in that file
+replays the candidate through the strengthened ABI, autotune-sweep, pointer,
+and sub-agent gates; v23 is retained as historical evidence, not a future
+promotion baseline.

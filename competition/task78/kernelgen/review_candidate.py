@@ -127,6 +127,196 @@ def _triton_config_call(node: ast.Call) -> bool:
     )
 
 
+def _config_option_findings(tree: ast.AST) -> list[dict]:
+    """Reject config options outside the portable Triton ABI allowlist.
+
+    The CPU model intentionally accepts arbitrary config options because it is
+    not a target compiler.  That made ``multibuffer=True`` invisible until the
+    Ascend Arc compile.  Unknown options are therefore a hard gate: they need
+    a target-version proof before a scarce submission, not a best-effort guess.
+    """
+    allowed = {"num_warps", "num_stages"}
+    findings = []
+    for node in [n for n in ast.walk(tree) if isinstance(n, ast.Call) and _triton_config_call(n)]:
+        for keyword in node.keywords:
+            if keyword.arg is None or keyword.arg in allowed:
+                continue
+            findings.append({
+                "severity": "blocker",
+                "kind": "unknown-config-option",
+                "line": keyword.value.lineno,
+                "option": keyword.arg,
+                "message": (
+                    f"triton.Config option {keyword.arg!r} is outside the portable ABI "
+                    "allowlist; require target compiler/version evidence before submission."
+                ),
+            })
+    return findings
+
+
+def _autotuned_jit_names(tree: ast.AST) -> dict[str, ast.FunctionDef]:
+    result = {}
+    for fn in [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]:
+        has_jit = any(
+            (isinstance(dec, ast.Attribute)
+             and isinstance(dec.value, ast.Name)
+             and dec.value.id == "triton" and dec.attr == "jit")
+            or (isinstance(dec, ast.Name) and dec.id == "jit")
+            for dec in fn.decorator_list
+        )
+        has_autotune = any(
+            isinstance(dec, ast.Call)
+            and isinstance(dec.func, ast.Attribute)
+            and isinstance(dec.func.value, ast.Name)
+            and dec.func.value.id == "triton"
+            and dec.func.attr == "autotune"
+            for dec in fn.decorator_list
+        )
+        if has_jit and has_autotune:
+            result[fn.name] = fn
+    return result
+
+
+def _autotune_binding_findings(tree: ast.AST) -> list[dict]:
+    """Catch explicit tile constexpr kwargs merged by an autotune wrapper.
+
+    Triton autotune implementations differ in how config kwargs are merged
+    with launch kwargs.  Passing a tile constexpr such as BR or NRC explicitly
+    is not portable: a target wrapper may provide the same key and raise the
+    exact duplicate-key TypeError seen on Enflame.  COMMON/WIDE and shape
+    arguments are intentionally not covered by this check.
+    """
+    tile_names = {"BT", "BH", "HS", "BN", "BC", "BR", "NRC"}
+    autotuned = _autotuned_jit_names(tree)
+    findings = []
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Subscript)):
+            continue
+        value = node.func.value
+        if not isinstance(value, ast.Name) or value.id not in autotuned:
+            continue
+        constexpr = _constexpr_params(autotuned[value.id])
+        for keyword in node.keywords:
+            if keyword.arg in tile_names and keyword.arg in constexpr:
+                findings.append({
+                    "severity": "blocker",
+                    "kind": "autotune-explicit-tile-constexpr",
+                    "line": keyword.value.lineno,
+                    "function": value.id,
+                    "argument": keyword.arg,
+                    "message": (
+                        f"autotuned kernel {value.id} receives tile constexpr "
+                        f"{keyword.arg} explicitly; target autotune wrappers may merge "
+                        "the same key and raise a duplicate-argument error."
+                    ),
+                })
+    return findings
+
+
+def _masked_pointer_findings(tree: ast.AST) -> list[dict]:
+    """Reject masked loads whose pointer expression can be negative.
+
+    A mask does not guarantee that every backend avoids evaluating or lowering
+    an invalid pointer expression.  Normalize the index first (for example via
+    tl.where) or use separate source paths.  This catches the Kunlunxin and
+    Enflame ``cols - DN`` pattern that the CPU model cannot model faithfully.
+    """
+    findings = []
+    for node in ast.walk(tree):
+        if not _is_tl_load(node) or not node.args:
+            continue
+        pointer = ast.unparse(node.args[0])
+        if not re.search(r"\b(?:col|cols|c|rc)\s*-\s*(?:DN|DR)\b", pointer):
+            continue
+        findings.append({
+            "severity": "blocker",
+            "kind": "masked-negative-pointer",
+            "line": node.lineno,
+            "pointer": pointer,
+            "message": (
+                "masked tl.load pointer contains a potentially negative column "
+                "offset; materialize a nonnegative index before pointer arithmetic."
+            ),
+        })
+    return findings
+
+
+def _scalar_mask_findings(tree: ast.AST) -> list[dict]:
+    """Flag scalar head predicates combined with vector load/store masks."""
+    findings = []
+    for fn in [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and _is_jit_decorator(n)]:
+        scalar_masks = set()
+        for item in ast.walk(fn):
+            if not isinstance(item, ast.Assign) or not isinstance(item.value, ast.Compare):
+                continue
+            if len(item.targets) != 1 or not isinstance(item.targets[0], ast.Name):
+                continue
+            left = item.value.left
+            if isinstance(left, ast.Name) and left.id in {"head", "token", "job"}:
+                scalar_masks.add(item.targets[0].id)
+        if not scalar_masks:
+            continue
+        for item in ast.walk(fn):
+            if not (isinstance(item, ast.Call) and isinstance(item.func, ast.Attribute)):
+                continue
+            if not (isinstance(item.func.value, ast.Name)
+                    and item.func.value.id == "tl"
+                    and item.func.attr in {"load", "store"}):
+                continue
+            mask_kw = next((kw for kw in item.keywords if kw.arg == "mask"), None)
+            if mask_kw is None:
+                continue
+            if _names(mask_kw.value) & scalar_masks:
+                findings.append({
+                    "severity": "blocker",
+                    "kind": "implicit-scalar-mask-broadcast",
+                    "line": mask_kw.value.lineno,
+                    "function": fn.name,
+                    "message": (
+                        "a scalar head/token predicate is combined directly with a "
+                        "vector mask; materialize an explicit vector-shaped predicate "
+                        "before target lowering."
+                    ),
+                })
+    return findings
+
+
+def _autotune_tile_grid_findings(tree: ast.AST) -> list[dict]:
+    """Catch host-side loop counts fixed to a tile size not in autotune configs."""
+    config_values: dict[str, set[int]] = {}
+    for node in [n for n in ast.walk(tree) if isinstance(n, ast.Call) and _triton_config_call(n)]:
+        if not node.args or not isinstance(node.args[0], ast.Dict):
+            continue
+        for key, value in zip(node.args[0].keys, node.args[0].values):
+            if not (isinstance(key, ast.Constant) and isinstance(key.value, str)):
+                continue
+            literal = _int_literal(value)
+            if literal is not None:
+                config_values.setdefault(key.value, set()).add(literal)
+    findings = []
+    for tile_name, tile_values in config_values.items():
+        if tile_name not in {"BC", "BN", "BR"} or len(tile_values) <= 1:
+            continue
+        if tile_name == "BC":
+            match = re.search(r"triton\.cdiv\(\s*(?:dn|dr)\s*,\s*(\d+)\s*\)",
+                              ast.unparse(tree))
+            if match and tile_values != {int(match.group(1))}:
+                findings.append({
+                    "severity": "blocker",
+                    "kind": "autotune-tile-grid-mismatch",
+                    "line": match.string[:match.start()].count("\n") + 1,
+                    "tile": tile_name,
+                    "configured_tiles": sorted(tile_values),
+                    "host_divisor": int(match.group(1)),
+                    "message": (
+                        f"autotune configs vary {tile_name}={sorted(tile_values)}, but host "
+                        f"loop count is fixed at divisor {match.group(1)}; every selected "
+                        "config must cover the same columns."
+                    ),
+                })
+    return findings
+
+
 def _num_warps_findings(tree: ast.AST, backend: str) -> list[dict]:
     """Audit every statically visible ``num_warps`` value.
 
@@ -365,6 +555,11 @@ def inspect_source(path: Path) -> dict:
     findings.extend(_next_power_of_two_findings(tree))
     findings.extend(_num_warps_findings(tree, backend))
     findings.extend(_hygon_shape_findings(tree, backend))
+    findings.extend(_config_option_findings(tree))
+    findings.extend(_autotune_binding_findings(tree))
+    findings.extend(_masked_pointer_findings(tree))
+    findings.extend(_scalar_mask_findings(tree))
+    findings.extend(_autotune_tile_grid_findings(tree))
 
     return {
         "path": str(path),

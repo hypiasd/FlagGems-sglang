@@ -68,6 +68,13 @@ Parse the returned source before executing it. Reject when:
 Static checks cannot prove performance. They only prevent obvious invalid
 submissions from consuming target evaluation opportunities.
 
+For Triton autotune candidates, the local gate must also verify that every
+`triton.Config` option is supported by the target ABI, that launch kwargs do
+not duplicate autotuned tile constexprs, and that host-side loop/grid counts
+remain consistent with every configured tile. If the target compiler is
+unavailable, unknown or non-portable options are blockers rather than assumed
+supported features.
+
 ## Gate 3 — local correctness
 
 Run the repository's tests and a source-level semantic harness. Cover the
@@ -78,6 +85,11 @@ immutability where applicable.
 If the local harness cannot compile the target dialect, report semantic
 evidence separately from compiler evidence. Do not call a CPU model a device
 test.
+
+If the candidate has autotune configs, a single-config semantic pass is
+insufficient. Exercise every visible config, at least on tail, zero-segment,
+and strided cases; a config that leaves missing or duplicate writes rejects the
+candidate.
 
 ## Gate 4 — target evidence
 
@@ -103,6 +115,12 @@ KernelGen may propose a candidate, but it never decides promotion. A read-only
 sub-agent review is useful before the target run, especially for public names,
 masked addresses, stride arithmetic, and duplicated stores.
 
+The sub-agent is a discovery layer, not a checklist formatter. Any credible
+finding outside the deterministic rules remains unresolved and blocks
+promotion until KernelGen repairs it or a target compile/correctness smoke test
+resolves it. An empty deterministic report does not override a non-empty
+`novel_findings` receipt.
+
 ## Mode-specific use
 
 - `generate_kernel`: use for a new operator after Gate 0; expect the most
@@ -113,4 +131,3 @@ masked addresses, stride arithmetic, and duplicated stores.
   target-only APIs and semantic drift.
 - `autotune_kernel`: use only when input specs and executable correctness tests
   are available; stop or mark `inconclusive` when attempts remain at zero.
-

@@ -24,6 +24,7 @@ Run from any directory:
     python3 competition/task78/validate_cpu.py --all
     python3 competition/task78/validate_cpu.py --source-dir competition/task78/kernelgen/candidates/<RUN_ID>
     python3 competition/task78/validate_cpu.py --source-dir <CANDIDATE_DIR> --json <RESULT.json>
+    python3 competition/task78/validate_cpu.py --source-dir <CANDIDATE_DIR> --autotune-sweep
     python3 competition/task78/validate_cpu.py --backend ascend
     python3 competition/task78/validate_cpu.py --backend default --verbose
 
@@ -152,13 +153,21 @@ class PythonJIT:
         self.fn = function
         self.model = model
         self.signature = inspect.signature(function)
+        self.autotune_configs = []
+        self.autotune_defaults = {}
         functools.update_wrapper(self, function)
 
     def __getitem__(self, grid):
         def launch(*args, **kwargs):
             require(self.model.call is not None, "kernel launched outside a validation call")
             kwargs = dict(kwargs)
-            for name, value in getattr(self, "autotune_defaults", {}).items():
+            configs = getattr(self, "autotune_configs", [])
+            if configs:
+                config_index = min(self.model.autotune_index, len(configs) - 1)
+                defaults = configs[config_index]
+            else:
+                defaults = getattr(self, "autotune_defaults", {})
+            for name, value in defaults.items():
                 kwargs.setdefault(name, value)
             for option in ("num_warps", "num_stages"):
                 kwargs.pop(option, None)
@@ -200,6 +209,7 @@ class CPUModel:
     def __init__(self):
         self.call = None
         self.last_launches = []
+        self.autotune_index = 0
         self.pid = self.grid = None
         self.triton = RestrictedModule("triton")
         self.triton.__path__ = []
@@ -239,13 +249,15 @@ class CPUModel:
             self.options = kwargs
 
     def autotune(self, configs=None, **_kwargs):
-        """Use the first autotune config for CPU-only semantic execution."""
+        """Expose every autotune config to the optional CPU semantic sweep."""
         configs = list(configs or ())
 
         def decorate(function):
             if configs and isinstance(function, PythonJIT):
-                config = configs[0]
-                function.autotune_defaults = dict(getattr(config, "values", {}))
+                function.autotune_configs = [
+                    dict(getattr(config, "values", {})) for config in configs
+                ]
+                function.autotune_defaults = dict(function.autotune_configs[0])
             return function
 
         return decorate
@@ -475,6 +487,35 @@ def cases():
     return result
 
 
+def autotune_coverage_cases(suite):
+    """Select the shapes most likely to expose config-dependent coverage bugs.
+
+    The first autotune config still runs the complete suite.  Repeating all
+    189 cases for every config is unnecessarily expensive on the CPU model;
+    later configs exercise the boundary/stride/empty cases where a tile-size
+    mismatch can create missing or duplicate writes.  ``--autotune-sweep-full``
+    remains available for the release audit.
+    """
+    needles = (
+        "empty-or-segment-",
+        "grid-loop-",
+        "strided-grid-loop-",
+        "head-tail-",
+        "view-",
+    )
+    tile_boundaries = ("-257-", "-511-", "-512-", "-513-", "-1024-", "-1025-", "-513")
+    selected = []
+    for case in suite:
+        if case.name.startswith(needles):
+            selected.append(case)
+        elif case.name.startswith("tiles-") and any(token in case.name for token in tile_boundaries):
+            selected.append(case)
+        elif case.name.startswith("dtype-") and case.name.endswith("-all"):
+            selected.append(case)
+    require(selected, "autotune coverage suite must not be empty")
+    return selected
+
+
 def run_case(model, wrapper, case, seed, max_programs=None):
     tokens, heads, dn, dr = case.shape
     generator = torch.Generator(device="cpu").manual_seed(seed)
@@ -575,7 +616,8 @@ def self_check():
     model.call = None
 
 
-def validate_backend(backend, suite, verbose, source_dir=None):
+def validate_backend(backend, suite, verbose, source_dir=None,
+                     autotune_sweep=False, autotune_sweep_full=False):
     suffix = "" if backend == "default" else f"_{backend}"
     source_dir = Path(__file__).resolve().parent if source_dir is None else Path(source_dir)
     path = source_dir / f"concat_and_cast_mha_k{suffix}.py"
@@ -590,26 +632,43 @@ def validate_backend(backend, suite, verbose, source_dir=None):
     print(f"\n[{backend}] {path} sha256={digest}", flush=True)
     with model.installed():
         exec(compile(source, str(path), "exec"), module.__dict__)
-        declared = {obj.__name__ for obj in module.__dict__.values() if isinstance(obj, PythonJIT)}
+        declared_objects = [obj for obj in module.__dict__.values() if isinstance(obj, PythonJIT)]
+        declared = {obj.__name__ for obj in declared_objects}
+        available_configs = max(
+            (len(getattr(obj, "autotune_configs", ())) for obj in declared_objects),
+            default=0,
+        )
+        config_count = available_configs if autotune_sweep and available_configs else 1
         wrapper = module.concat_and_cast_mha_k
-        for index, case in enumerate(suite):
-            model.last_launches = []
-            try:
-                call = run_case(model, wrapper, case, seed=78000 + index,
-                                max_programs=32 if backend == "ascend" else None)
-            except Exception as exc:
-                failures += 1
-                print(f"  FAIL {case.name}: {exc}", flush=True)
-            else:
-                successes += 1
-                if verbose:
-                    print(f"  PASS {case.name}: {call.launches}", flush=True)
-            finally:
-                for name, grid in model.last_launches:
-                    invoked[name] += 1
-                    programs[name] += grid[0] * grid[1] * grid[2]
-                    grids[name, grid] += 1
-    print(f"[{backend}] {successes}/{len(suite)} cases passed; {failures} failed")
+        boundary_suite = autotune_coverage_cases(suite)
+        executed_case_count = 0
+        for config_index in range(config_count):
+            model.autotune_index = config_index
+            config_suite = suite if (not autotune_sweep or config_index == 0 or autotune_sweep_full) else boundary_suite
+            executed_case_count += len(config_suite)
+            for index, case in enumerate(config_suite):
+                model.last_launches = []
+                try:
+                    call = run_case(model, wrapper, case, seed=78000 + index,
+                                    max_programs=32 if backend == "ascend" else None)
+                except Exception as exc:
+                    failures += 1
+                    suffix = f" config={config_index}" if autotune_sweep else ""
+                    print(f"  FAIL {case.name}{suffix}: {exc}", flush=True)
+                else:
+                    successes += 1
+                    if verbose:
+                        suffix = f" config={config_index}" if autotune_sweep else ""
+                        print(f"  PASS {case.name}{suffix}: {call.launches}", flush=True)
+                finally:
+                    for name, grid in model.last_launches:
+                        invoked[name] += 1
+                        programs[name] += grid[0] * grid[1] * grid[2]
+                        grids[name, grid] += 1
+    model.autotune_index = 0
+    total_cases = executed_case_count
+    print(f"[{backend}] {successes}/{total_cases} cases passed; {failures} failed "
+          f"({config_count} autotune config(s) exercised)")
     for name in sorted(invoked):
         shapes = [grid for kernel, grid in grids if kernel == name]
         largest = max(grid[0] * grid[1] * grid[2] for grid in shapes)
@@ -624,7 +683,7 @@ def validate_backend(backend, suite, verbose, source_dir=None):
     if path.read_bytes() != source:
         print("  FAIL source changed during validation; rerun against the current file")
         failures += 1
-    return failures
+    return failures, config_count
 
 
 def main(argv=None):
@@ -637,6 +696,14 @@ def main(argv=None):
     parser.add_argument("--json", dest="json_path", type=Path, default=None,
                         help="write a machine-readable summary to this path")
     parser.add_argument("--verbose", action="store_true", help="show each successful case and its launch grid")
+    parser.add_argument(
+        "--autotune-sweep", action="store_true",
+        help="run all cases for the first config and boundary/stride cases for every remaining config",
+    )
+    parser.add_argument(
+        "--autotune-sweep-full", action="store_true",
+        help="run all cases for every visible autotune config (slow release audit)",
+    )
     args = parser.parse_args(argv)
     print(NOTICE, flush=True)
     torch.set_num_threads(1)
@@ -649,11 +716,17 @@ def main(argv=None):
         for backend in (args.backend,) if args.backend else BACKENDS:
             try:
                 before = failures
-                failures += validate_backend(backend, suite, args.verbose, args.source_dir)
+                sweep = args.autotune_sweep or args.autotune_sweep_full
+                backend_failures, config_count = validate_backend(
+                    backend, suite, args.verbose, args.source_dir, sweep,
+                    args.autotune_sweep_full,
+                )
+                failures += backend_failures
                 results.append({
                     "backend": backend,
-                    "passed": failures == before,
-                    "failures": failures - before,
+                    "passed": backend_failures == 0,
+                    "failures": backend_failures,
+                    "autotune_configs": config_count,
                 })
             except Exception as exc:
                 failures += 1
@@ -662,6 +735,7 @@ def main(argv=None):
                     "backend": backend,
                     "passed": False,
                     "failures": 1,
+                    "autotune_configs": None,
                     "error": str(exc),
                 })
     summary = {
@@ -670,6 +744,8 @@ def main(argv=None):
         "backends": results,
         "source_dir": str(args.source_dir or Path(__file__).resolve().parent),
         "case_count": len(suite),
+        "autotune_sweep": args.autotune_sweep or args.autotune_sweep_full,
+        "autotune_sweep_full": args.autotune_sweep_full,
         "notice": NOTICE,
     }
     if args.json_path is not None:

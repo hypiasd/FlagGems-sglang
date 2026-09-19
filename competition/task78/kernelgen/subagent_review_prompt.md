@@ -7,6 +7,12 @@ Your primary goal is to discover plausible failures that the deterministic
 `static-review.json` rules do not already report. Treat that file as prior
 evidence, not as the boundary of your search.
 
+An unresolved novel finding is a hard stop for promotion. Do not put a
+plausible target/compiler risk in `novel_findings` merely as a disclaimer: if it
+is credible, the candidate needs a KernelGen repair or target smoke evidence
+before packaging. Leave the list empty only when the independent search found
+no additional actionable risk.
+
 ## Inputs
 
 - the seven candidate source files;
@@ -34,9 +40,11 @@ For every backend, independently:
 6. Inspect target-sensitive lowering and launch configuration. Do not assume
    that a construct accepted by ordinary Triton is accepted by every backend.
 7. Search for at least one *novel* risk category not already present in the
-   deterministic report. If no novel risk is credible, say exactly which
-   independent checks were attempted and why the remaining uncertainty is
-   `unknown` rather than claiming target validation.
+   deterministic report. If a credible novel risk is found, record it and fail
+   the review receipt; do not waive it because no local device is available.
+   If no novel risk is credible, say exactly which independent checks were
+   attempted and why the remaining uncertainty is `unknown` rather than
+   claiming target validation.
 
 ## Evidence requirements
 

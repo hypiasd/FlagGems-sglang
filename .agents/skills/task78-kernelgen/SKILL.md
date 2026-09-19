@@ -38,6 +38,13 @@ candidate for promotion. Treat those checks as semantic evidence only; use
 the actual Arc result as the performance evidence. International A and B must
 be reported separately even when they share the generic source file.
 
+The candidate gate is intentionally conservative: it checks portable
+`triton.Config` options, autotune-to-launch parameter binding, masked pointer
+construction, scalar/vector mask shapes, and coverage for every visible
+autotune config. A read-only sub-agent receipt with any unresolved
+`novel_findings` is a hard failure and must trigger a KernelGen repair or a
+real target compile smoke test; it is not a note to carry into Arc.
+
 For each new version, use the repository's Workflow v2 in
 `competition/task78/kernelgen/README.md`: KernelGen generation per backend,
 automatic deterministic hard gate, isolated semantic validation, adversarial

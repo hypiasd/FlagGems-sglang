@@ -62,3 +62,23 @@ The results confirm that the local CPU model and static scan are useful
 pre-submit filters but do not model the target Triton runtime, vendor
 configuration schema, or device execution semantics. Arc remains the source
 of target compilation, correctness, and speedup evidence.
+
+## Post-v23 workflow audit
+
+The local record above reflects the gate that existed before the Arc run. After
+the Arc failures, the gate was strengthened. Re-running v23 under the new
+workflow rejects it before packaging because it contains:
+
+- Ascend `triton.Config(..., multibuffer=True)`, outside the portable config
+  ABI allowlist;
+- Enflame explicit `BR`/`NRC` tile kwargs on an autotuned launch, plus masked
+  negative pointer arithmetic and scalar-mask broadcasting;
+- Iluvatar autotune `BC` values that vary while the host loop counts stay fixed
+  at a divisor of 512;
+- Kunlunxin masked negative pointer arithmetic and scalar-mask broadcasting.
+
+The new CPU validator also sweeps every visible autotune config. On the v23
+Iluvatar source this independently reports missing output coverage for configs
+4 and 5 (the `BC=256` variants), reproducing a concrete failure without Arc.
+This does not retroactively change the submitted score; it closes the gap for
+future candidates.
