@@ -43,5 +43,22 @@ python3 competition/task78/kernelgen/run_candidate_gate.py \
 unzip -t competition/task78/flagos-task78-v23.zip
 ```
 
-Arc remains the only source of target compilation, correctness, and speedup
-evidence. No score is claimed for v23 before submission.
+## Arc result
+
+Arc completed v23 at `09-19 20:41` with `5/8` passing chips. The surviving
+scores were Iluvatar `2.19x`, MetaX `1.10x`, Hygon `2.28x`, International A
+`1.64x`, and International B `1.75x`. Because three chips failed, Arc showed
+no average acceleration for this submission.
+
+The failure details were:
+
+| Chip | Arc failure |
+| --- | --- |
+| Enflame | `JITFunction.run() got multiple values for keyword argument 'BR'` in every reported case. |
+| Kunlunxin | Numerical mismatch; roughly 76%–82% of elements mismatched in the displayed cases, with very large absolute/relative errors. |
+| Ascend | `Config.__init__() got an unexpected keyword argument 'multibuffer'` in every reported case. |
+
+The results confirm that the local CPU model and static scan are useful
+pre-submit filters but do not model the target Triton runtime, vendor
+configuration schema, or device execution semantics. Arc remains the source
+of target compilation, correctness, and speedup evidence.
