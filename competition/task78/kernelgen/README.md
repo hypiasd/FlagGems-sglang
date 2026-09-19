@@ -96,10 +96,22 @@ Run from the repository root before promoting a candidate:
 
 ```bash
 python3 -m py_compile competition/task78/kernelgen/candidates/<RUN_ID>/*.py
-python3 competition/task78/validate_cpu.py --all
+python3 competition/task78/validate_cpu.py --source-dir competition/task78/kernelgen/candidates/<RUN_ID> --all
+python3 competition/task78/kernelgen/run_candidate_gate.py \
+  competition/task78/kernelgen/candidates/<RUN_ID> \
+  --json competition/task78/kernelgen/candidates/<RUN_ID>/local-gate.json
 git diff --check
 ```
 
+The candidate gate checks all seven files, the exact public entry, forbidden
+fallbacks/native concatenation, Python syntax, and the full 189-case CPU
+semantic suite. `validate_cpu.py --source-dir` makes the validator operate on
+an isolated candidate directory instead of silently reading the root baseline.
+Known autotune/cache-hint syntax is ignored only by the CPU model; target
+compilation is still a separate gate.
+
 The CPU validator checks source semantics and memory coverage only. It does
 not compile Triton, validate FlagTree lowering, or predict Arc performance.
-The final performance gate remains an actual Arc submission.
+KernelGen responses with no executed correctness cases or no numeric target
+benchmark remain inconclusive. The final performance gate remains an actual
+Arc submission.

@@ -21,8 +21,10 @@ Hygon, but remains 0.02x below the complete v12 result of 1.27x. The v19
 device result supersedes the unmeasured wording above.
 
 Run `python3 competition/task78/validate_cpu.py --all` from the repository
-root for direct-source CPU semantic checks. This does not compile Triton or
-prove device performance. The local [validation record](v19/validation.md)
+root for direct-source CPU semantic checks. To validate an isolated candidate,
+pass `--source-dir`; the reusable pre-Arc gate is
+`python3 competition/task78/kernelgen/run_candidate_gate.py <candidate-dir>`.
+These checks do not compile Triton or prove device performance. The local [validation record](v19/validation.md)
 contains the tested source hashes and results.
 
 Historical version directories and ZIPs remain reproducible references.

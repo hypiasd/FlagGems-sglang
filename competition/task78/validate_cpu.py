@@ -21,6 +21,8 @@ NaN payloads and signed-zero bit patterns are not compared.
 Run from any directory:
     python3 competition/task78/validate_cpu.py             # all seven files
     python3 competition/task78/validate_cpu.py --all
+    python3 competition/task78/validate_cpu.py --source-dir competition/task78/kernelgen/candidates/<RUN_ID>
+    python3 competition/task78/validate_cpu.py --source-dir <CANDIDATE_DIR> --json <RESULT.json>
     python3 competition/task78/validate_cpu.py --backend ascend
     python3 competition/task78/validate_cpu.py --backend default --verbose
 
@@ -39,6 +41,7 @@ import functools
 import hashlib
 import inspect
 import itertools
+import json
 from pathlib import Path
 import sys
 from types import ModuleType
@@ -154,6 +157,8 @@ class PythonJIT:
         def launch(*args, **kwargs):
             require(self.model.call is not None, "kernel launched outside a validation call")
             kwargs = dict(kwargs)
+            for name, value in getattr(self, "autotune_defaults", {}).items():
+                kwargs.setdefault(name, value)
             for option in ("num_warps", "num_stages"):
                 kwargs.pop(option, None)
             # Unknown options/arguments must fail; do not silently drop them.
@@ -202,6 +207,13 @@ class CPUModel:
         self.triton.jit = self.jit
         self.triton.cdiv = lambda x, y: (x + y - 1) // y
         self.triton.next_power_of_2 = self.next_power_of_2
+        # These decorators/config objects affect device compilation and
+        # autotuning, not the serial CPU semantic model. Treat them as
+        # identity wrappers here so candidates can be checked for indexing
+        # and coverage without silently running a different algorithm.
+        self.triton.autotune = self.autotune
+        self.triton.heuristics = self.identity_decorator
+        self.triton.Config = self.KernelConfig
         self.tl.constexpr = type("constexpr", (), {})
         for name in ("int8", "int16", "int32", "int64", "float16", "bfloat16", "float32", "float64"):
             setattr(self.tl, name, getattr(torch, name))
@@ -210,12 +222,36 @@ class CPUModel:
         self.tl.arange = self.arange
         self.tl.static_range = range
         self.tl.where = torch.where
+        self.tl.broadcast_to = torch.broadcast_to
+        self.tl.multiple_of = lambda value, _alignment: value
+        self.tl.max_contiguous = lambda value, _alignment: value
         self.tl.maximum = lambda x, y: torch.maximum(torch.as_tensor(x), torch.as_tensor(y))
         self.tl.load = self.load
         self.tl.store = self.store
 
     def jit(self, function=None):
         return (lambda fn: PythonJIT(fn, self)) if function is None else PythonJIT(function, self)
+
+    class KernelConfig:
+        def __init__(self, values=None, **kwargs):
+            self.values = dict(values or {})
+            self.options = kwargs
+
+    def autotune(self, configs=None, **_kwargs):
+        """Use the first autotune config for CPU-only semantic execution."""
+        configs = list(configs or ())
+
+        def decorate(function):
+            if configs and isinstance(function, PythonJIT):
+                config = configs[0]
+                function.autotune_defaults = dict(getattr(config, "values", {}))
+            return function
+
+        return decorate
+
+    @staticmethod
+    def identity_decorator(*_args, **_kwargs):
+        return lambda function: function
 
     @staticmethod
     def next_power_of_2(value):
@@ -243,7 +279,12 @@ class CPUModel:
         return torch.arange(start, end, dtype=torch.int64)
 
     @staticmethod
-    def load(pointer, mask=None, other=None):
+    def load(pointer, mask=None, other=None, **kwargs):
+        unsupported = set(kwargs) - {
+            "cache_modifier", "eviction_policy", "padding_option",
+            "boundary_check", "volatile",
+        }
+        require(not unsupported, f"tl.load unsupported keyword(s): {sorted(unsupported)}")
         require(isinstance(pointer, Ptr), "tl.load requires a Ptr")
         active, addresses = pointer.active(mask, "load")
         allocation = pointer.allocation
@@ -258,7 +299,9 @@ class CPUModel:
         return values
 
     @staticmethod
-    def store(pointer, value, mask=None):
+    def store(pointer, value, mask=None, **kwargs):
+        unsupported = set(kwargs) - {"cache_modifier", "eviction_policy"}
+        require(not unsupported, f"tl.store unsupported keyword(s): {sorted(unsupported)}")
         require(isinstance(pointer, Ptr), "tl.store requires a Ptr")
         active, addresses = pointer.active(mask, "store")
         allocation = pointer.allocation
@@ -531,9 +574,10 @@ def self_check():
     model.call = None
 
 
-def validate_backend(backend, suite, verbose):
+def validate_backend(backend, suite, verbose, source_dir=None):
     suffix = "" if backend == "default" else f"_{backend}"
-    path = Path(__file__).resolve().with_name(f"concat_and_cast_mha_k{suffix}.py")
+    source_dir = Path(__file__).resolve().parent if source_dir is None else Path(source_dir)
+    path = source_dir / f"concat_and_cast_mha_k{suffix}.py"
     source = path.read_bytes()
     digest = hashlib.sha256(source).hexdigest()[:12]
     model = CPUModel()
@@ -542,7 +586,7 @@ def validate_backend(backend, suite, verbose):
     module.__dict__["range"] = model.kernel_range
     successes, failures = 0, 0
     invoked, programs, grids = Counter(), Counter(), Counter()
-    print(f"\n[{backend}] {path.name} sha256={digest}", flush=True)
+    print(f"\n[{backend}] {path} sha256={digest}", flush=True)
     with model.installed():
         exec(compile(source, str(path), "exec"), module.__dict__)
         declared = {obj.__name__ for obj in module.__dict__.values() if isinstance(obj, PythonJIT)}
@@ -587,6 +631,10 @@ def main(argv=None):
     choice = parser.add_mutually_exclusive_group()
     choice.add_argument("--all", action="store_true", help="validate all seven backends (default)")
     choice.add_argument("--backend", choices=BACKENDS, help="filename suffix; default selects the unsuffixed file")
+    parser.add_argument("--source-dir", type=Path, default=None,
+                        help="directory containing the seven candidate files; defaults to this script's directory")
+    parser.add_argument("--json", dest="json_path", type=Path, default=None,
+                        help="write a machine-readable summary to this path")
     parser.add_argument("--verbose", action="store_true", help="show each successful case and its launch grid")
     args = parser.parse_args(argv)
     print(NOTICE, flush=True)
@@ -596,12 +644,39 @@ def main(argv=None):
         suite = cases()
         print(f"Validator self-checks passed; {len(suite)} cases per backend.", flush=True)
         failures = 0
+        results = []
         for backend in (args.backend,) if args.backend else BACKENDS:
             try:
-                failures += validate_backend(backend, suite, args.verbose)
+                before = failures
+                failures += validate_backend(backend, suite, args.verbose, args.source_dir)
+                results.append({
+                    "backend": backend,
+                    "passed": failures == before,
+                    "failures": failures - before,
+                })
             except Exception as exc:
                 failures += 1
                 print(f"[{backend}] FAIL loading/running backend: {exc}", flush=True)
+                results.append({
+                    "backend": backend,
+                    "passed": False,
+                    "failures": 1,
+                    "error": str(exc),
+                })
+    summary = {
+        "passed": failures == 0,
+        "failures": failures,
+        "backends": results,
+        "source_dir": str(args.source_dir or Path(__file__).resolve().parent),
+        "case_count": len(suite),
+        "notice": NOTICE,
+    }
+    if args.json_path is not None:
+        args.json_path.parent.mkdir(parents=True, exist_ok=True)
+        args.json_path.write_text(
+            json.dumps(summary, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
     print(f"\n{'PASS' if failures == 0 else 'FAIL'}: {failures} failures. {NOTICE}")
     return int(failures != 0)
 
