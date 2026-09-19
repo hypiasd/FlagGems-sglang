@@ -1,5 +1,10 @@
 # Task 78 KernelGen workflow
 
+The repository-wide guarded KernelGen workflow is defined by
+`.agents/skills/kernelgen-flagos/references/reliability-gates.md`. This
+directory adds only the Task 78 operator contract and candidate layout; it does
+not redefine what counts as a valid KernelGen result.
+
 This directory is the candidate-generation workspace for
 `concat_and_cast_mha_k`. Nothing under it is a submission package. Generated
 code must stay in a candidate directory until it passes the local checks and

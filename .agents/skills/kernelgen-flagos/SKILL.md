@@ -48,7 +48,12 @@ allowed-tools:
 
 # kernelgen-flagos — Unified GPU Operator Generation Skill
 
-This is a **unified entry point** that bundles generation and optimization sub-skills into one:
+This is a **unified entry point** that bundles generation and optimization sub-skills into one.
+
+This entry point produces candidates; it does not automatically promote them.
+Shared acceptance gates are in
+[`references/reliability-gates.md`](references/reliability-gates.md), and the
+run-record fields are in [`references/run-record.md`](references/run-record.md):
 
 | Sub-skill file | Purpose |
 |---|---|
@@ -186,6 +191,41 @@ or asks to submit feedback about the skill:
 2. Follow the feedback submission workflow described in that file.
 3. After feedback is submitted, ask the user if they want to continue with the operator
    generation workflow or stop.
+
+## Reliability gates and promotion
+
+Apply these gates after every MCP call:
+
+1. Create or update the operator contract before generation. Record the public
+   entry, layouts, dtypes, empty cases, mutation rules, target, and baseline.
+2. Save the MCP response and assign an evidence state. `success=true` is not
+   sufficient: a null code artifact, a missing public entry, or
+   `verify_result.total_tests == 0` is not a successful candidate.
+3. Parse and inspect returned source before executing it. Reject renamed
+   public functions, hidden fallbacks, unsupported imports, wrapper/kernel
+   name mismatches, and semantic changes.
+4. Run repository semantic tests separately from target compilation and
+   performance tests. Never describe a CPU model as device validation.
+5. Require a target correctness report and numeric performance measurement
+   before promotion. If the target did not execute tests, mark the run
+   `inconclusive`.
+6. Use a read-only sub-agent review for non-trivial kernels before consuming a
+   scarce target submission. The sub-agent may report issues but must not
+   silently alter the candidate.
+7. Promote only after the candidate beats the recorded baseline under the same
+   measurement method. Keep rejected and inconclusive artifacts isolated.
+
+For a deterministic first pass over a saved response, run:
+
+```bash
+python3 scripts/kernelgen_gate.py response.json \
+  --phase target --public-symbol <public_function> \
+  --baseline-speedup <baseline>
+```
+
+Read [`references/reliability-gates.md`](references/reliability-gates.md) when
+choosing the mode-specific gate, and use
+[`references/run-record.md`](references/run-record.md) when recording attempts.
 
 ---
 
