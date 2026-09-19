@@ -113,6 +113,12 @@ python3 competition/task78/kernelgen/review_candidate.py \
   --json competition/task78/kernelgen/candidates/<RUN_ID>/static-review.json
 ```
 
+The candidate gate also runs this scan automatically. Passing an old
+`subagent-review.json` cannot bypass a newly discovered compiler-risk rule.
+The scan currently blocks runtime JIT branches, uncapped tile powers,
+non-power-of-two or unproven `num_warps`, and the Hygon 1-D load-cast followed
+by broadcast pattern that failed in the v22 Arc run.
+
 Then send the candidate and `static-review.json` to a read-only sub-agent. The
 sub-agent must inspect every backend and write a small receipt with this shape:
 
@@ -122,15 +128,26 @@ sub-agent must inspect every backend and write a small receipt with this shape:
   "reviewer": "<agent id or nickname>",
   "candidate": "<run id>",
   "reviewed_source_sha256": {"default": "..."},
-  "backend_findings": {"default": {"status": "pass", "notes": []}},
+  "backend_findings": {
+    "default": {
+      "status": "pass",
+      "notes": [],
+      "evidence": ["static-review:<finding-or-none>"]
+    }
+  },
   "blockers": []
 }
 ```
 
 The sub-agent is not trusted as a compiler or benchmark. Its receipt is a
 mandatory review checkpoint, and `blockers` must be empty before packaging.
+`status` must be one of `pass`, `fail`, or `unknown`; every backend must state
+what evidence supports the status. An unverified target compiler is recorded
+as evidence, not silently treated as a pass. The deterministic scan runs
+inside `run_candidate_gate.py`, so both layers must agree before packaging.
 The gate also compares every receipt hash with the current seven source files,
-so a review cannot be reused after the candidate changes.
+and requires `candidate` to equal the candidate directory name, so a review
+cannot be reused after the candidate changes or copied between runs.
 The deterministic scan catches known high-risk patterns (runtime JIT control
 flow and uncapped tile powers); the sub-agent checks branch shapes, implicit
 broadcasts, pointer/mask safety, and whether the structural change is real.
@@ -149,3 +166,17 @@ not compile Triton, validate FlagTree lowering, or predict Arc performance.
 KernelGen responses with no executed correctness cases or no numeric target
 benchmark remain inconclusive. The final performance gate remains an actual
 Arc submission.
+
+For regression testing against the historical failures:
+
+```bash
+python3 competition/task78/kernelgen/review_candidate.py \
+  competition/task78/kernelgen/candidates/task78-v21-20260919-130000
+python3 competition/task78/kernelgen/review_candidate.py \
+  competition/task78/kernelgen/candidates/task78-v22-20260919-180120
+python3 competition/task78/kernelgen/test_review_candidate_regressions.py
+```
+
+The v21 scan must report runtime JIT branch blockers in the Iluvatar and
+MetaX files. The v22 scan must report the Enflame `num_warps=12` blockers and
+the Hygon cast-before-broadcast blocker.

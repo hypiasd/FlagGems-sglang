@@ -1,7 +1,6 @@
 # Task 78: `concat_and_cast_mha_k`
 
-Current candidate: v22 local-gated candidate under
-`kernelgen/candidates/task78-v22-20260919-180120/`.
+Historical v22 candidate: `kernelgen/candidates/task78-v22-20260919-180120/`.
 Submission package: `flagos-task78-v22.zip`, containing the seven operator
 files in this directory. All files expose `concat_and_cast_mha_k(k, k_nope, k_rope)`.
 
@@ -38,11 +37,12 @@ avoidable target compilation failures but does not replace Arc validation.
 Historical version directories and ZIPs remain reproducible references.
 The user uploads candidates to FlagOS for real eight-chip evaluation.
 
-v22 is locally gated but not yet Arc-validated. It uses separate prefix/suffix
-kernel paths on the generic, Iluvatar, and MetaX backends; bounded token/head
-and suffix chunking on Ascend; a two-phase serial-head path on Enflame and
-Kunlunxin; and shape-stable split stores on Hygon. Its local evidence is
-recorded in the candidate directory; do not treat it as a performance result.
+v22 originally passed the older local semantic gate and was submitted, but the
+Arc result was 6/8: Enflame failed on `num_warps=12`, Hygon failed in the
+suffix cast/broadcast lowering, and the six surviving chip scores were
+1.64/1.07/0.29/0.25/1.39/1.36x. The stricter compiler-risk regression gate
+now rejects v22 before packaging and records both failure patterns. Do not
+treat v22 as a valid optimization baseline.
 
 ## KernelGen candidate workflow
 

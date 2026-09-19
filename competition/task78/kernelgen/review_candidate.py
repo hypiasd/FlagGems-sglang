@@ -3,9 +3,10 @@
 
 This is not a Triton compiler.  It finds patterns that must be explicitly
 reviewed before a scarce target submission: runtime branches in JIT kernels,
-unbounded power-of-two aranges, and unbounded block constants.  Findings are
-reported as blockers or warnings; a sub-agent must inspect the source and
-produce the final review receipt consumed by run_candidate_gate.py.
+unbounded power-of-two aranges, invalid launch configurations, and known
+backend-sensitive shape conversions.  Findings are reported as blockers or
+warnings; a sub-agent must inspect the source and produce the final review
+receipt consumed by run_candidate_gate.py.
 """
 
 from __future__ import annotations
@@ -73,6 +74,255 @@ def _compile_time_names(node: ast.FunctionDef) -> set[str]:
     return known
 
 
+def _int_literal(node: ast.AST) -> int | None:
+    """Return a small statically visible integer, otherwise ``None``."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, int) \
+            and not isinstance(node.value, bool):
+        return node.value
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.UAdd, ast.USub)):
+        value = _int_literal(node.operand)
+        if value is not None:
+            return value if isinstance(node.op, ast.UAdd) else -value
+    return None
+
+
+def _is_power_of_two(value: int) -> bool:
+    return value > 0 and (value & (value - 1)) == 0
+
+
+def _literal_bindings(tree: ast.AST) -> dict[str, set[int]]:
+    """Collect obvious scalar bindings used by launch configuration code.
+
+    This intentionally handles assignments and literal ``for`` iterables.  It
+    is enough to prove the common ``for nw in (1, 2, 4, 8)`` idiom without
+    pretending that arbitrary Python data flow is statically understood.
+    """
+    bindings: dict[str, set[int]] = {}
+    for item in ast.walk(tree):
+        if isinstance(item, ast.Assign):
+            value = _int_literal(item.value)
+            if value is not None:
+                for target in item.targets:
+                    if isinstance(target, ast.Name):
+                        bindings.setdefault(target.id, set()).add(value)
+        elif isinstance(item, ast.AnnAssign):
+            value = _int_literal(item.value) if item.value is not None else None
+            if value is not None and isinstance(item.target, ast.Name):
+                bindings.setdefault(item.target.id, set()).add(value)
+        elif isinstance(item, ast.For) and isinstance(item.target, ast.Name):
+            values = item.iter.elts if isinstance(item.iter, (ast.Tuple, ast.List)) else []
+            literals = {_int_literal(value) for value in values}
+            literals.discard(None)
+            if literals:
+                bindings.setdefault(item.target.id, set()).update(literals)
+    return bindings
+
+
+def _triton_config_call(node: ast.Call) -> bool:
+    return (
+        isinstance(node.func, ast.Attribute)
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "triton"
+        and node.func.attr == "Config"
+    )
+
+
+def _num_warps_findings(tree: ast.AST, backend: str) -> list[dict]:
+    """Audit every statically visible ``num_warps`` value.
+
+    Triton accepts the Python object construction for values that a target
+    compiler may reject.  In particular, Enflame rejects non-power-of-two
+    warp counts.  Helper-based config construction (``_cfg(..., 12)``) is
+    resolved through the helper's positional parameter as well.
+    """
+    findings: list[dict] = []
+    bindings = _literal_bindings(tree)
+    config_helpers: dict[str, int] = {}
+    helper_param_names: set[str] = set()
+
+    for fn in [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]:
+        for call in [n for n in ast.walk(fn) if isinstance(n, ast.Call) and _triton_config_call(n)]:
+            keyword = next((kw for kw in call.keywords if kw.arg == "num_warps"), None)
+            if keyword is None:
+                continue
+            if isinstance(keyword.value, ast.Name):
+                params = [arg.arg for arg in fn.args.args]
+                if keyword.value.id in params:
+                    config_helpers[fn.name] = params.index(keyword.value.id)
+                    helper_param_names.add(keyword.value.id)
+
+    def check_value(value: int | None, line: int, context: str) -> None:
+        if value is None:
+            findings.append({
+                "severity": "blocker",
+                "kind": "unproven-num-warps",
+                "line": line,
+                "message": f"{context}: num_warps is not statically provable to be a positive power of two.",
+            })
+        elif not _is_power_of_two(value):
+            findings.append({
+                "severity": "blocker",
+                "kind": "invalid-num-warps",
+                "line": line,
+                "value": value,
+                "message": f"{context}: num_warps={value} is not a positive power of two.",
+            })
+
+    for node in [n for n in ast.walk(tree) if isinstance(n, ast.Call) and _triton_config_call(n)]:
+        keyword = next((kw for kw in node.keywords if kw.arg == "num_warps"), None)
+        if keyword is None:
+            continue
+        value = _int_literal(keyword.value)
+        if value is None and isinstance(keyword.value, ast.Name):
+            if keyword.value.id in helper_param_names:
+                # The helper call sites below carry the concrete values.
+                continue
+            values = bindings.get(keyword.value.id)
+            if values and all(_is_power_of_two(item) for item in values):
+                value = 1
+            elif values:
+                for item in sorted(values):
+                    check_value(item, keyword.value.lineno, f"triton.Config")
+                continue
+        check_value(value, keyword.value.lineno, "triton.Config")
+
+    for node in [n for n in ast.walk(tree) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)]:
+        param_index = config_helpers.get(node.func.id)
+        if param_index is None or param_index >= len(node.args):
+            continue
+        value_node = node.args[param_index]
+        value = _int_literal(value_node)
+        if value is None and isinstance(value_node, ast.Name):
+            values = bindings.get(value_node.id)
+            if values and all(_is_power_of_two(item) for item in values):
+                continue
+            if values:
+                for item in sorted(values):
+                    check_value(item, node.lineno, f"{node.func.id} helper")
+                continue
+        check_value(value, node.lineno, f"{node.func.id} helper")
+
+    return findings
+
+
+def _is_tl_load(node: ast.AST) -> bool:
+    return (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "tl"
+        and node.func.attr == "load"
+    )
+
+
+def _is_load_cast(node: ast.AST) -> bool:
+    """Match ``tl.load(...).to(COMMON)`` before a later broadcast."""
+    return (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "to"
+        and _is_tl_load(node.func.value)
+    )
+
+
+def _hygon_shape_findings(tree: ast.AST, backend: str) -> list[dict]:
+    """Catch the Hygon lowering pattern that failed in the v22 Arc run."""
+    if backend != "hygon":
+        return []
+    findings: list[dict] = []
+    for fn in [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and _is_jit_decorator(n)]:
+        load_cast_names: dict[str, int] = {}
+        for item in ast.walk(fn):
+            if isinstance(item, ast.Assign) and _is_load_cast(item.value):
+                for target in item.targets:
+                    if isinstance(target, ast.Name):
+                        load_cast_names[target.id] = item.lineno
+            if not (isinstance(item, ast.Call) and isinstance(item.func, ast.Attribute)):
+                continue
+            if not (isinstance(item.func.value, ast.Name)
+                    and item.func.value.id == "tl"
+                    and item.func.attr == "broadcast_to"):
+                continue
+            if not item.args or not isinstance(item.args[0], ast.Name):
+                continue
+            source_name = item.args[0].id
+            if source_name in load_cast_names:
+                findings.append({
+                    "severity": "blocker",
+                    "kind": "hygon-cast-before-broadcast",
+                    "line": item.lineno,
+                    "source_line": load_cast_names[source_name],
+                    "message": "Hygon-sensitive path casts a 1-D tl.load result before tl.broadcast_to; broadcast to the explicit 2-D store shape before casting, or use a backend-safe direct load.",
+                })
+    return findings
+
+
+def _next_power_of_two_findings(tree: ast.AST) -> list[dict]:
+    """Flag power-of-two tiles unless a visible ``min`` bound proves safety."""
+    parent: dict[ast.AST, ast.AST] = {}
+    for node in ast.walk(tree):
+        for child in ast.iter_child_nodes(node):
+            parent[child] = node
+
+    bindings = _literal_bindings(tree)
+
+    def visible_constant(node: ast.AST) -> int | None:
+        value = _int_literal(node)
+        if value is not None:
+            return value
+        if isinstance(node, ast.Name):
+            values = bindings.get(node.id)
+            if values and len(values) == 1:
+                return next(iter(values))
+        return None
+
+    bounded_names: dict[str, int] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign) or not isinstance(node.value, ast.Call):
+            continue
+        if not (isinstance(node.value.func, ast.Name) and node.value.func.id == "min"):
+            continue
+        limits = [value for value in (visible_constant(arg) for arg in node.value.args) if value is not None]
+        if not limits:
+            continue
+        for target in node.targets:
+            if isinstance(target, ast.Name):
+                bounded_names[target.id] = min(limits)
+
+    findings: list[dict] = []
+    for node in ast.walk(tree):
+        if not (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "triton"
+            and node.func.attr == "next_power_of_2"
+        ):
+            continue
+        container = parent.get(node)
+        bounded = False
+        for _ in range(3):
+            if (
+                isinstance(container, ast.Call)
+                and isinstance(container.func, ast.Name)
+                and container.func.id == "min"
+                and any(visible_constant(arg) is not None for arg in container.args)
+            ):
+                bounded = True
+                break
+            container = parent.get(container) if container is not None else None
+        if not bounded and node.args and isinstance(node.args[0], ast.Name):
+            bounded = node.args[0].id in bounded_names
+        if not bounded:
+            findings.append({
+                "severity": "blocker",
+                "kind": "uncapped-next-power-of-two",
+                "line": node.lineno,
+                "message": "next_power_of_2 result is not visibly capped; large dimensions can create invalid or very slow tiles.",
+            })
+    return findings
+
+
 def inspect_source(path: Path) -> dict:
     source = path.read_text(encoding="utf-8")
     tree = ast.parse(source, filename=str(path))
@@ -102,13 +352,6 @@ def inspect_source(path: Path) -> dict:
                 "line": line_no,
                 "message": "arange bound is a block constexpr; verify the wrapper caps it for target compiler limits.",
             })
-        if "triton.next_power_of_2" in line and not re.search(r"min\s*\(", line):
-            findings.append({
-                "severity": "blocker",
-                "kind": "uncapped-next-power-of-two",
-                "line": line_no,
-                "message": "next_power_of_2 result is not visibly capped; large dimensions can create invalid or very slow tiles.",
-            })
         if "eviction_policy" in line or "cache_modifier" in line:
             findings.append({
                 "severity": "warning",
@@ -116,6 +359,12 @@ def inspect_source(path: Path) -> dict:
                 "line": line_no,
                 "message": "target-specific cache hint requires compiler evidence; do not infer support from CPU validation.",
             })
+
+    base_name = "concat_and_cast_mha_k"
+    backend = "default" if path.stem == base_name else path.stem[len(base_name) + 1:]
+    findings.extend(_next_power_of_two_findings(tree))
+    findings.extend(_num_warps_findings(tree, backend))
+    findings.extend(_hygon_shape_findings(tree, backend))
 
     return {
         "path": str(path),

@@ -2,8 +2,8 @@
 """Run deterministic pre-Arc gates for a Task 78 candidate directory.
 
 This gate is intentionally local-only. A PASS means the candidate satisfies
-the source contract and the CPU semantic model; it does not prove Triton
-compilation or accelerator performance.
+the source contract, the CPU semantic model, and the deterministic compiler-
+risk scan; it does not prove Triton compilation or accelerator performance.
 """
 
 from __future__ import annotations
@@ -54,7 +54,7 @@ def static_check(path: Path) -> dict:
 
 
 def review_check(review_path: Path | None, required: bool,
-                 expected_hashes: dict[str, str]) -> dict:
+                 expected_hashes: dict[str, str], expected_candidate: str) -> dict:
     """Validate the read-only sub-agent review receipt.
 
     The gate cannot prove that a sub-agent really inspected the source, but it
@@ -81,6 +81,17 @@ def review_check(review_path: Path | None, required: bool,
     blockers = review.get("blockers")
     findings = review.get("backend_findings")
     observed_hashes = review.get("reviewed_source_sha256")
+    candidate_match = review.get("candidate") == expected_candidate
+    findings_shape_valid = (
+        isinstance(findings, dict)
+        and all(
+            isinstance(findings.get(backend), dict)
+            and findings[backend].get("status") in {"pass", "fail", "unknown"}
+            and isinstance(findings[backend].get("notes"), list)
+            and isinstance(findings[backend].get("evidence"), list)
+            for backend in expected_hashes
+        )
+    )
     hashes_match = (
         isinstance(observed_hashes, dict)
         and all(observed_hashes.get(backend) == digest
@@ -88,10 +99,9 @@ def review_check(review_path: Path | None, required: bool,
     )
     passed = (
         review.get("review_type") == "read-only-subagent"
-        and review.get("candidate")
+        and candidate_match
         and review.get("reviewer")
-        and isinstance(findings, dict)
-        and all(backend in findings for backend in expected_hashes)
+        and findings_shape_valid
         and isinstance(blockers, list)
         and not blockers
         and hashes_match
@@ -102,6 +112,8 @@ def review_check(review_path: Path | None, required: bool,
         "passed": bool(passed),
         "path": str(review_path),
         "blocker_count": len(blockers) if isinstance(blockers, list) else None,
+        "findings_shape_valid": findings_shape_valid,
+        "candidate_match": candidate_match,
         "hashes_match": hashes_match,
         "error": None if passed else "review receipt is missing required fields or has blockers",
     }
@@ -115,6 +127,8 @@ def main(argv=None) -> int:
                         help="read-only sub-agent review receipt")
     parser.add_argument("--require-review", action="store_true",
                         help="reject candidates without a passing review receipt")
+    parser.add_argument("--compiler-review-json", type=Path,
+                        help="save the automatic compiler-risk scan receipt")
     args = parser.parse_args(argv)
     source_dir = args.source_dir.resolve()
     static = []
@@ -126,7 +140,7 @@ def main(argv=None) -> int:
             continue
         try:
             py_compile.compile(str(path), doraise=True)
-            result = static_check(path)
+            result = {"backend": backend, **static_check(path)}
         except Exception as exc:
             result = {"path": str(path), "syntax": False, "error": str(exc)}
         static.append(result)
@@ -150,6 +164,34 @@ def main(argv=None) -> int:
     finally:
         validator_json.unlink(missing_ok=True)
 
+    with tempfile.NamedTemporaryFile(prefix="task78-review-", suffix=".json", delete=False) as handle:
+        compiler_review_json = Path(handle.name)
+    compiler_review_command = [
+        sys.executable,
+        str(Path(__file__).with_name("review_candidate.py")),
+        str(source_dir),
+        "--json",
+        str(compiler_review_json),
+    ]
+    compiler_review_completed = subprocess.run(
+        compiler_review_command, text=True, capture_output=True
+    )
+    try:
+        compiler_review = json.loads(compiler_review_json.read_text(encoding="utf-8"))
+    except Exception as exc:
+        compiler_review = {
+            "passed": False,
+            "error": f"compiler-risk scan did not produce JSON: {exc}",
+        }
+    finally:
+        if args.compiler_review_json and "compiler_review" in locals():
+            args.compiler_review_json.parent.mkdir(parents=True, exist_ok=True)
+            args.compiler_review_json.write_text(
+                json.dumps(compiler_review, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+        compiler_review_json.unlink(missing_ok=True)
+
     static_passed = (
         not missing
         and len(static) == len(BACKENDS)
@@ -157,15 +199,19 @@ def main(argv=None) -> int:
                 for item in static)
     )
     expected_hashes = {
-        backend: item["sha256"]
-        for backend, item in zip(BACKENDS, static)
-        if item.get("sha256")
+        item["backend"]: item["sha256"]
+        for item in static
+        if item.get("backend") and item.get("sha256")
     }
-    review = review_check(args.review_json, args.require_review, expected_hashes)
+    review = review_check(
+        args.review_json, args.require_review, expected_hashes, source_dir.name
+    )
     passed = (
         static_passed
         and semantic.get("passed") is True
         and completed.returncode == 0
+        and compiler_review.get("passed") is True
+        and compiler_review_completed.returncode == 0
         and review["passed"]
     )
     result = {
@@ -174,8 +220,10 @@ def main(argv=None) -> int:
         "missing": missing,
         "static": static,
         "semantic": semantic,
+        "compiler_review": compiler_review,
         "review": review,
         "validator_returncode": completed.returncode,
+        "compiler_review_returncode": compiler_review_completed.returncode,
         "notice": "Local gate only; target compiler/device and performance remain unverified.",
     }
     if args.json_path:
