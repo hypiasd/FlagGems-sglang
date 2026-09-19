@@ -119,12 +119,18 @@ The scan currently blocks runtime JIT branches, uncapped tile powers,
 non-power-of-two or unproven `num_warps`, and the Hygon 1-D load-cast followed
 by broadcast pattern that failed in the v22 Arc run.
 
-Then send the candidate and `static-review.json` to a read-only sub-agent. The
-sub-agent must inspect every backend and write a small receipt with this shape:
+Then send the candidate, `static-review.json`, and
+[`subagent_review_prompt.md`](subagent_review_prompt.md) to a read-only
+sub-agent. The sub-agent must perform an adversarial review: its main job is
+to search for risks not already covered by the deterministic rules, not merely
+to repeat the checklist. It must inspect every backend and write a receipt
+with this shape:
 
 ```json
 {
   "review_type": "read-only-subagent",
+  "review_mode": "adversarial-read-only",
+  "searched_for_novel_risks": true,
   "reviewer": "<agent id or nickname>",
   "candidate": "<run id>",
   "reviewed_source_sha256": {"default": "..."},
@@ -132,7 +138,8 @@ sub-agent must inspect every backend and write a small receipt with this shape:
     "default": {
       "status": "pass",
       "notes": [],
-      "evidence": ["static-review:<finding-or-none>"]
+      "evidence": [],
+      "novel_findings": []
     }
   },
   "blockers": []
@@ -142,9 +149,10 @@ sub-agent must inspect every backend and write a small receipt with this shape:
 The sub-agent is not trusted as a compiler or benchmark. Its receipt is a
 mandatory review checkpoint, and `blockers` must be empty before packaging.
 `status` must be one of `pass`, `fail`, or `unknown`; every backend must state
-what evidence supports the status. An unverified target compiler is recorded
-as evidence, not silently treated as a pass. The deterministic scan runs
-inside `run_candidate_gate.py`, so both layers must agree before packaging.
+what evidence supports the status and keep `novel_findings` separate from
+rule-confirmed findings. An unverified target compiler is recorded as
+evidence, not silently treated as a pass. The deterministic scan runs inside
+`run_candidate_gate.py`, so both layers must agree before packaging.
 The gate also compares every receipt hash with the current seven source files,
 and requires `candidate` to equal the candidate directory name, so a review
 cannot be reused after the candidate changes or copied between runs.

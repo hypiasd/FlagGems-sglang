@@ -89,6 +89,7 @@ def review_check(review_path: Path | None, required: bool,
             and findings[backend].get("status") in {"pass", "fail", "unknown"}
             and isinstance(findings[backend].get("notes"), list)
             and isinstance(findings[backend].get("evidence"), list)
+            and isinstance(findings[backend].get("novel_findings"), list)
             for backend in expected_hashes
         )
     )
@@ -99,6 +100,8 @@ def review_check(review_path: Path | None, required: bool,
     )
     passed = (
         review.get("review_type") == "read-only-subagent"
+        and review.get("review_mode") == "adversarial-read-only"
+        and review.get("searched_for_novel_risks") is True
         and candidate_match
         and review.get("reviewer")
         and findings_shape_valid
