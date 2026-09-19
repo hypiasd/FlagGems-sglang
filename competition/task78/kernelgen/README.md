@@ -99,13 +99,47 @@ python3 -m py_compile competition/task78/kernelgen/candidates/<RUN_ID>/*.py
 python3 competition/task78/validate_cpu.py --source-dir competition/task78/kernelgen/candidates/<RUN_ID> --all
 python3 competition/task78/kernelgen/run_candidate_gate.py \
   competition/task78/kernelgen/candidates/<RUN_ID> \
+  --require-review \
+  --review-json competition/task78/kernelgen/candidates/<RUN_ID>/subagent-review.json \
   --json competition/task78/kernelgen/candidates/<RUN_ID>/local-gate.json
 git diff --check
 ```
 
+Before the candidate gate, run the deterministic compiler-risk scan:
+
+```bash
+python3 competition/task78/kernelgen/review_candidate.py \
+  competition/task78/kernelgen/candidates/<RUN_ID> \
+  --json competition/task78/kernelgen/candidates/<RUN_ID>/static-review.json
+```
+
+Then send the candidate and `static-review.json` to a read-only sub-agent. The
+sub-agent must inspect every backend and write a small receipt with this shape:
+
+```json
+{
+  "review_type": "read-only-subagent",
+  "reviewer": "<agent id or nickname>",
+  "candidate": "<run id>",
+  "reviewed_source_sha256": {"default": "..."},
+  "backend_findings": {"default": {"status": "pass", "notes": []}},
+  "blockers": []
+}
+```
+
+The sub-agent is not trusted as a compiler or benchmark. Its receipt is a
+mandatory review checkpoint, and `blockers` must be empty before packaging.
+The gate also compares every receipt hash with the current seven source files,
+so a review cannot be reused after the candidate changes.
+The deterministic scan catches known high-risk patterns (runtime JIT control
+flow and uncapped tile powers); the sub-agent checks branch shapes, implicit
+broadcasts, pointer/mask safety, and whether the structural change is real.
+The target compiler/device gate remains necessary.
+
 The candidate gate checks all seven files, the exact public entry, forbidden
 fallbacks/native concatenation, Python syntax, and the full 189-case CPU
-semantic suite. `validate_cpu.py --source-dir` makes the validator operate on
+semantic suite and—when `--require-review` is used—a passing sub-agent receipt.
+`validate_cpu.py --source-dir` makes the validator operate on
 an isolated candidate directory instead of silently reading the root baseline.
 Known autotune/cache-hint syntax is ignored only by the CPU model; target
 compilation is still a separate gate.

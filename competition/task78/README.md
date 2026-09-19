@@ -1,7 +1,8 @@
 # Task 78: `concat_and_cast_mha_k`
 
-Current candidate: [v19 design and per-chip matrix](v19/README.md).
-Submission package: `flagos-task78-v19.zip`, containing the seven operator
+Current candidate: v22 local-gated candidate under
+`kernelgen/candidates/task78-v22-20260919-180120/`.
+Submission package: `flagos-task78-v22.zip`, containing the seven operator
 files in this directory. All files expose `concat_and_cast_mha_k(k, k_nope, k_rope)`.
 
 v18 finished with 6/8 (Enflame/Kunlunxin failed, Ascend 0.02x); the last complete run was v16 at
@@ -27,8 +28,21 @@ pass `--source-dir`; the reusable pre-Arc gate is
 These checks do not compile Triton or prove device performance. The local [validation record](v19/validation.md)
 contains the tested source hashes and results.
 
+For new candidates, promotion now requires two reviews before an Arc upload:
+the deterministic compiler-risk scan in
+`kernelgen/review_candidate.py`, followed by a read-only sub-agent review with
+an auditable receipt. A candidate with unresolved branch-shape, implicit
+broadcast, pointer/mask, or tile-bound blockers is not packaged. This reduces
+avoidable target compilation failures but does not replace Arc validation.
+
 Historical version directories and ZIPs remain reproducible references.
 The user uploads candidates to FlagOS for real eight-chip evaluation.
+
+v22 is locally gated but not yet Arc-validated. It uses separate prefix/suffix
+kernel paths on the generic, Iluvatar, and MetaX backends; bounded token/head
+and suffix chunking on Ascend; a two-phase serial-head path on Enflame and
+Kunlunxin; and shape-stable split stores on Hygon. Its local evidence is
+recorded in the candidate directory; do not treat it as a performance result.
 
 ## KernelGen candidate workflow
 

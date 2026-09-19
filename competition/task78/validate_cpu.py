@@ -13,9 +13,10 @@ resource limits, or accelerator performance. It is not a Python sandbox.
 Only the explicitly implemented Triton API is accepted. Active load/store
 lanes must address the passed tensor view, including its actual storage offset
 and strides; masked-off addresses may be invalid. All input backing storage
-is protected. Every nonempty wrapper call must launch exactly one kernel and
-write every output element exactly once across all its programs. Empty outputs
-must not launch. Output values use exact numeric comparison with equal NaNs;
+is protected. Every nonempty wrapper call must launch one or more kernels and
+write every output element exactly once across all their programs. This permits
+structural prefix/suffix schedules that use separate straight-line kernels.
+Empty outputs must not launch. Output values use exact numeric comparison with equal NaNs;
 NaN payloads and signed-zero bit patterns are not compared.
 
 Run from any directory:
@@ -383,8 +384,8 @@ class ValidationCall:
         if output.numel() == 0:
             require(not self.launches, f"empty output launched kernels: {self.launches}")
             return
-        require(len(self.launches) == 1,
-                f"expected a single launch, got {len(self.launches)}: {self.launches}")
+        require(self.launches,
+                "nonempty output launched no kernels")
         require(allocation is not None, "returned output was never passed to a kernel")
         indices = logical_offsets(output)
         counts = allocation.writes[indices]

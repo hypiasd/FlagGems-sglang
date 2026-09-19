@@ -53,10 +53,68 @@ def static_check(path: Path) -> dict:
     }
 
 
+def review_check(review_path: Path | None, required: bool,
+                 expected_hashes: dict[str, str]) -> dict:
+    """Validate the read-only sub-agent review receipt.
+
+    The gate cannot prove that a sub-agent really inspected the source, but it
+    can prevent a candidate from being promoted without an explicit review
+    receipt and can reject receipts that still contain unresolved blockers.
+    The receipt is deliberately small and human-auditable.
+    """
+    if review_path is None:
+        return {
+            "required": required,
+            "present": False,
+            "passed": not required,
+            "error": "review receipt was not supplied" if required else None,
+        }
+    try:
+        review = json.loads(review_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        return {
+            "required": required,
+            "present": False,
+            "passed": False,
+            "error": f"could not read review receipt: {exc}",
+        }
+    blockers = review.get("blockers")
+    findings = review.get("backend_findings")
+    observed_hashes = review.get("reviewed_source_sha256")
+    hashes_match = (
+        isinstance(observed_hashes, dict)
+        and all(observed_hashes.get(backend) == digest
+                for backend, digest in expected_hashes.items())
+    )
+    passed = (
+        review.get("review_type") == "read-only-subagent"
+        and review.get("candidate")
+        and review.get("reviewer")
+        and isinstance(findings, dict)
+        and all(backend in findings for backend in expected_hashes)
+        and isinstance(blockers, list)
+        and not blockers
+        and hashes_match
+    )
+    return {
+        "required": required,
+        "present": True,
+        "passed": bool(passed),
+        "path": str(review_path),
+        "blocker_count": len(blockers) if isinstance(blockers, list) else None,
+        "hashes_match": hashes_match,
+        "error": None if passed else "review receipt is missing required fields or has blockers",
+    }
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("source_dir", type=Path)
     parser.add_argument("--json", dest="json_path", type=Path)
+    parser.add_argument("--review-json", type=Path,
+                        help="read-only sub-agent review receipt")
+    parser.add_argument("--require-review", action="store_true",
+                        help="reject candidates without a passing review receipt")
     args = parser.parse_args(argv)
     source_dir = args.source_dir.resolve()
     static = []
@@ -98,13 +156,25 @@ def main(argv=None) -> int:
         and all(item.get("syntax") and item.get("public_entry") and not item.get("forbidden")
                 for item in static)
     )
-    passed = static_passed and semantic.get("passed") is True and completed.returncode == 0
+    expected_hashes = {
+        backend: item["sha256"]
+        for backend, item in zip(BACKENDS, static)
+        if item.get("sha256")
+    }
+    review = review_check(args.review_json, args.require_review, expected_hashes)
+    passed = (
+        static_passed
+        and semantic.get("passed") is True
+        and completed.returncode == 0
+        and review["passed"]
+    )
     result = {
         "passed": passed,
         "source_dir": str(source_dir),
         "missing": missing,
         "static": static,
         "semantic": semantic,
+        "review": review,
         "validator_returncode": completed.returncode,
         "notice": "Local gate only; target compiler/device and performance remain unverified.",
     }
