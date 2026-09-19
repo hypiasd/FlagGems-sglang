@@ -38,6 +38,13 @@ candidate for promotion. Treat those checks as semantic evidence only; use
 the actual Arc result as the performance evidence. International A and B must
 be reported separately even when they share the generic source file.
 
+For each new version, use the repository's Workflow v2 in
+`competition/task78/kernelgen/README.md`: KernelGen generation per backend,
+automatic deterministic hard gate, isolated semantic validation, adversarial
+read-only sub-agent review for novel risks, then deliberate packaging. Do not
+describe a candidate as ready merely because the CPU validator or sub-agent
+review passed.
+
 Do not place KernelGen Tokens, local MCP configuration, or benchmark credentials
 in Git. The repository-local MCP example is
 `competition/task78/kernelgen/mcp.json.example`.

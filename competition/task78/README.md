@@ -1,5 +1,9 @@
 # Task 78: `concat_and_cast_mha_k`
 
+Current candidate: [v23 validation record](v23/validation.md) and
+[`flagos-task78-v23.zip`](flagos-task78-v23.zip). v23 passed all local gates
+for seven backends and is awaiting Arc evaluation; this is not a device score.
+
 Historical v22 candidate: `kernelgen/candidates/task78-v22-20260919-180120/`.
 Submission package: `flagos-task78-v22.zip`, containing the seven operator
 files in this directory. All files expose `concat_and_cast_mha_k(k, k_nope, k_rope)`.

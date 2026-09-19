@@ -66,6 +66,36 @@ changing only `BLOCK_SIZE`, `num_warps`, or another launch constant is not
 enough. Record the mechanism separately for each platform, including the two
 international evaluations of the shared generic file.
 
+## Workflow v2: generation, discovery, and promotion
+
+Every new version follows six separate stages:
+
+1. **Baseline contract** — freeze the v22 source hashes, the public entry,
+   stride/dtype/empty semantics, and the previous Arc result. The baseline is
+   read-only during generation.
+2. **KernelGen generation** — call `optimize_kernel` once per backend with a
+   backend-specific structural objective. Generated source goes only into the
+   new candidate directory. A response without usable code is rejected.
+3. **Deterministic hard gate** — run syntax, forbidden-pattern, launch-config,
+   runtime-branch, tile-bound, and known backend-risk checks. This stage can
+   reject a candidate but cannot certify it.
+4. **Semantic gate** — run the isolated 189-case CPU memory/semantic suite and
+   require all seven backend files to pass. CPU success is recorded separately
+   from compiler evidence; failures return to KernelGen repair before review.
+5. **Adversarial sub-agent review** — give the semantically passing candidate
+   and hard-gate report to the sub-agent using `subagent_review_prompt.md`. The
+   sub-agent must look for risks outside the hard-coded rules and label each
+   finding with exact evidence. It may not edit the candidate.
+6. **Promotion/Arc** — package only when stages 3–5 pass. Arc is the only
+   source of target compilation and performance evidence. A failure feeds its
+   exact error back into a new KernelGen repair call; it is never patched
+   manually while claiming KernelGen generated the result.
+
+The two review stages have different jobs: the deterministic stage prevents
+known invalid patterns from reaching the reviewer, while the adversarial stage
+is explicitly asked to discover new classes of errors. Neither stage is a
+substitute for target compilation.
+
 ## Recommended request
 
 Use the official Skill with a target platform and a bounded iteration count:
