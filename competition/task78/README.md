@@ -1,31 +1,32 @@
 # Task 78: `concat_and_cast_mha_k`
 
-Current candidate: [v23 validation record](v23/validation.md) and
-[`flagos-task78-v23.zip`](flagos-task78-v23.zip). Arc completed v23 at 5/8;
-see the validation record for per-chip scores and failure causes.
+Current candidate: [v24 validation record](v24/validation.md) and
+[`flagos-task78-v24.zip`](flagos-task78-v24.zip) — locally gated through all
+five Stages including the adversarial read-only review, **not yet submitted to
+Arc**. The root submission files in this directory remain the Arc-proven **v19**
+set (8/8, avg 1.25x), so upload the ZIP rather than the root files.
+`flagos-task78-v23.zip` (5/8) is superseded.
 
-Unreleased v24 draft: `kernelgen/candidates/task78-v24-20260920-000454/`
-(ignored workspace, not a submission package). It targets the three sub-1x
-chips with portable structural changes and passes the deterministic scan and
-the CPU semantic suite (201/201 on all seven backends), but the adversarial
-read-only review returned `fail` on Ascend and Hygon with four blockers, so it
-is **not packaged and not submitted**; that directory's `local-gate.json` is
-the rejected gate run and `subagent-review.json` the receipt. Two blockers are
-mechanical regressions against the v19 baseline: Ascend multiplies row indices
-in int32 and only then widens them, so the `WIDE` path can wrap before `rmask`
-(v19 widened first), and Hygon dropped the 2-D tile-product cap that the
-default and Ascend files keep (`4096 // bc`, `8192 // max(bn, brc)`), leaving
-up to 65536 elements per tile. Two are structural: Ascend unrolls
-`tl.static_range` over a shape-derived trip count, and Hygon's
-broadcast-address 2-D rope load plus 2-D cast sits in the suffix-lowering area
-that failed on Hygon in v22. A KernelGen repair round (or a target compile
-smoke test) is required before this draft can be promoted.
+v24 targets the three sub-1x chips of that v19 run (Ascend 0.14x, Enflame
+0.25x, Kunlunxin 0.27x) with portable structural changes and no repeat of the
+v22/v23 failure classes. Two adversarial review rounds were needed: the first
+receipt returned `fail` on Ascend and Hygon with four blockers — Ascend
+multiplied row indices in int32 before widening them and unrolled
+`tl.static_range` over a shape-derived trip count; Hygon had dropped the 2-D
+tile-product cap and used a broadcast-address 2-D rope load plus 2-D cast in the
+suffix-lowering area that failed on Hygon in v22. All four were repaired (Ascend
+now widens first and walks row blocks with the grid-stride loop v19 was accepted
+with; Hygon uses a fully 1-D row form) and the second receipt adjudicated them
+closed with no new blockers. Both receipts are kept in the ignored candidate
+run directory. Residual risks left for Arc, including Ascend `num_warps=8` (the
+first non-4 value on an Arc-tested Ascend launch) and `num_stages=2` on four
+files, are listed in the v24 validation record.
 
-While that draft was reviewed, the CPU validator gained twelve `wide-dim-*`
-cases because single-tile row coverage silently dropped every column past its
-tile cap: v19 covers them, the pre-fix draft failed 13 of 28 backend-case
-pairs in a direct probe, and the fixed draft passes. The suite is now 201
-cases per backend.
+While v24 was reviewed, the CPU validator gained twelve `wide-dim-*` cases
+because single-tile row coverage silently dropped every column past its tile
+cap: v19 covers them (201/201), the un-repaired draft failed 13 of 28
+backend-case pairs in a direct probe, and the packaged revision passes. The
+suite is now 201 cases per backend.
 
 Historical v22 candidate: `kernelgen/candidates/task78-v22-20260919-180120/`.
 Submission package: `flagos-task78-v22.zip`, containing the seven operator
