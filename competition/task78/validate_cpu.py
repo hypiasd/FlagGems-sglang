@@ -484,6 +484,14 @@ def cases():
         result.append(Case(f"strided-grid-loop-{dn}", (65, 9, dn, dr),
                            (torch.bfloat16, torch.float32, torch.float16),
                            ("all", "all", "transpose")))
+    # Head dimensions past the widest capped tile (4096). A kernel that covers a
+    # row with one tile and no column loop drops every column beyond its cap.
+    for dn, dr in ((4096, 904), (4096, 4096), (5000, 32), (32, 5000),
+                   (4097, 1), (513, 4096)):
+        for layout in ("contiguous", "all"):
+            result.append(Case(f"wide-dim-{dn}-{dr}-{layout}", (2, 3, dn, dr),
+                               (torch.float16, torch.bfloat16, torch.float32),
+                               (layout,) * 3))
     return result
 
 

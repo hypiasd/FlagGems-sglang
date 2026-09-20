@@ -80,10 +80,14 @@ Every new version follows six separate stages:
    runtime-branch, tile-bound, portable `triton.Config` ABI, autotune launch
    binding, masked-pointer, scalar-mask, and config-dependent coverage checks.
    This stage can reject a candidate but cannot certify it.
-4. **Semantic gate** — run the isolated 189-case CPU memory/semantic suite and
+4. **Semantic gate** — run the isolated 201-case CPU memory/semantic suite and
    require all seven backend files to pass. When a file uses `@triton.autotune`,
    run all cases for the first config and a boundary/stride/empty-case suite
    for every remaining config; use the slower full sweep for release audits.
+   The suite includes `wide-dim-*` cases with NoPE/RoPE dimensions at and past
+   the 4096 tile cap, because a row covered by a single capped tile without a
+   column loop silently drops every column beyond that cap; the v19 baseline
+   covers them and any candidate that does not is rejected here.
    CPU success is recorded separately from compiler evidence; failures return
    to KernelGen repair before review.
 5. **Adversarial sub-agent review** — give the semantically passing candidate
@@ -208,7 +212,7 @@ a credible new class of risk, the candidate stops at the gate.
 The target compiler/device gate remains necessary.
 
 The candidate gate checks all seven files, the exact public entry, forbidden
-fallbacks/native concatenation, the 189-case CPU semantic suite plus the
+fallbacks/native concatenation, the 201-case CPU semantic suite plus the
 autotune boundary sweep, and—when `--require-review` is used—a passing
 sub-agent receipt with no unresolved novel findings. The full per-config sweep
 is available as a slower release audit.
