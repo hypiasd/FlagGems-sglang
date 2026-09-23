@@ -1,242 +1,157 @@
-# Task 78 KernelGen workflow
+# Task 78 KernelGen adapter
 
-The repository-wide guarded KernelGen workflow is defined by
-`.agents/skills/kernelgen-flagos/references/reliability-gates.md`. This
-directory adds only the Task 78 operator contract and candidate layout; it does
-not redefine what counts as a valid KernelGen result.
+The reusable KernelGen workflow v4 is defined in
+`.agents/skills/kernelgen-flagos/references/reliability-gates.md`. This file
+adds only Task 78's operator contract, backend matrix, submission policy, and
+observed target constraints. The general workflow's evidence requirements
+remain authoritative.
 
-This directory is the candidate-generation workspace for
-`concat_and_cast_mha_k`. Nothing under it is a submission package. Generated
-code must stay in a candidate directory until it passes the local checks and
-is deliberately promoted into a version directory.
+The first reviewer capability holdout results—including the v22 Hygon miss—are
+recorded in [`reviewer-holdout-experiments.md`](reviewer-holdout-experiments.md).
 
-## One-time MCP setup
+## Workspace and submission boundary
 
-The official `kernelgen-flagos` Skill is vendored at
-`.agents/skills/kernelgen-flagos/`. To configure the MCP service locally:
-
-1. Copy `mcp.json.example` to the repository-root `.mcp.json`.
-2. Replace the placeholder with the local KernelGen Token.
-3. Keep `.mcp.json` untracked and restart the agent.
-
-Never paste the token into chat or commit it. The root `.mcp.json` is ignored
-by Git.
-
-## Candidate layout
-
-Use one run directory per KernelGen request:
+Candidate artifacts live under:
 
 ```text
 competition/task78/kernelgen/candidates/<run-id>/
-├── prompt.md
-├── ascend/
-├── enflame/
-├── hygon/
-├── iluvatar/
-├── kunlunxin/
-├── metax/
-└── generic/
 ```
 
-The `generic` result is evaluated independently on International A and B. Do
-not overwrite the seven root submission files during generation.
+Keep one immutable run directory per generation/repair attempt, with the
+prompt, raw KernelGen response, returned source, hashes, test reports, both
+reviewers' raw outputs/receipts, and raw target evidence. Never overwrite the root submission files or a
+numbered historical version during exploration. The ignored candidate area is
+not a submission package.
 
-## Task contract for every request
+The final archive contains exactly seven `concat_and_cast_mha_k*.py` files at
+ZIP root. The generic implementation is evaluated twice—International A and
+International B—so the evaluation matrix contains eight target results.
+Package preparation, user submission, official evaluation, and promotion of a
+new best are separate events. Do not submit to Arc on the user's behalf.
 
-The public entry point must remain:
+## Operator contract
+
+Public entry:
 
 ```python
 def concat_and_cast_mha_k(k, k_nope, k_rope):
     ...
 ```
 
-The exact semantics are:
+For each token `t` and head `h`:
 
 ```text
 k[t, h, :nope_dim] = k_nope[t, h, :]
 k[t, h, nope_dim:] = k_rope[t, 0, :]
 ```
 
-The implementation must use Triton or Triton-TLE only. Reject candidates that
-use PyTorch/native fallback, `try/except` fallback, device checks to bypass the
-kernel, a renamed public function, or a changed submission layout.
+Preserve the reference's cat-then-cast dtype promotion, output shape/device,
+arbitrary supported source strides, empty/tail behavior, and input immutability.
+Use Triton/Triton-TLE for the kernel path; no native/PyTorch fallback,
+`try/except` fallback, or device-based bypass.
 
-For a version candidate, every evaluated platform needs a structural change;
-changing only `BLOCK_SIZE`, `num_warps`, or another launch constant is not
-enough. Record the mechanism separately for each platform, including the two
-international evaluations of the shared generic file.
+For a new Task 78 version, every one of the seven implementation files must
+have a documented structural optimization, not just launch-constant tuning.
+The generic file's results must still be recorded separately for International
+A and B. A shared code change is not proof of shared target compatibility.
 
-## Workflow v2: generation, discovery, and promotion
+## Workflow for each version
 
-Every new version follows six separate stages:
+1. **Freeze evidence.** Record the baseline version and source hashes, contract
+   and test revision, each chip's latest/best score, score validity, and exact
+   failures from the preceding Arc run. Keep the known-good source immutable.
+2. **Plan one coherent batch.** For every implementation file, state the
+   structural change, observed bottleneck, expected score effect, and the
+   shapes/failure conditions that could disprove it. Batch meaningful changes
+   so a scarce Arc submission tests a real hypothesis, not a one-line tweak.
+3. **Check runtime capability.** Confirm the needed KernelGen operation is
+   actually callable in the current agent tool registry. A project `.mcp.json`
+   entry is configuration evidence only. If the tool is absent, preserve the
+   diagnosis and ready-to-run request, but do not hand-write a candidate or
+   call it KernelGen output.
+4. **Generate in isolation.** Ask KernelGen for each target-specific source
+   using the exact contract and structural objective. Save every response and
+   hash. Do not let a response's `success` flag stand in for tests.
+5. **Local semantic checks.** Run syntax/public-entry checks and the isolated
+   CPU semantic suite, including visible autotune configurations and
+   boundary/stride/empty/wide-dimension cases. These may run before review;
+   they are not target evidence.
+6. **Two-agent source review.** Follow `subagent_review_prompt.md`: a fresh
+   Stage A agent reviews exact candidate and baseline hashes without seeing
+   the static report; only after its raw response is saved does a different
+   Stage B agent receive the static report and reconcile every finding. Never
+   synthesize agent outputs or IDs. The gate validates receipt consistency but
+   cannot prove the agents ran or that their reasoning is right. A blocker or
+   unresolved finding means repair and a complete new review cycle.
+7. **Deterministic gate.** Run the compiler-risk scan after Stage A, then run
+   `run_candidate_gate.py` with both receipts and the exact baseline directory.
+   This gate can reject semantic/source risks; it cannot certify a vendor
+   compiler, target runtime, or speedup.
+8. **Target evidence and decision.** Prefer a real remote target compile,
+   correctness run, and benchmark when KernelGen supports that backend. Bind
+   the report to exact source/baseline hashes, compiler/runtime, the complete
+   adapter-declared case set, all pass counts, timing method, invocation/job
+   ID, and unmodified raw result. A self-authored manifest is a claim; a case
+   subset is diagnostic only. If no trusted target runner covers a chip, a
+   package may be labeled only as an unvalidated, user-controlled Arc
+   experiment; it is not a performance improvement and does not replace the
+   best source.
+9. **Package integrity.** Validate the final ZIP against the reviewed candidate
+   directory with `validate_package.py`. It must contain exactly the seven
+   root-level operator files, with byte-identical contents and recorded hashes.
+   Any post-review source change or repackaged mismatch invalidates approval.
+10. **Arc and ledger.** After the user submits, append the official result for
+   each of the eight evaluations, including failures and exact diagnostics.
+   Update the per-chip best table only from valid completed results, retaining
+   anomalous single-run values with an instability note. A single chip failure
+   means the submission has no valid all-chip aggregate.
 
-1. **Baseline contract** — freeze the v22 source hashes, the public entry,
-   stride/dtype/empty semantics, and the previous Arc result. The baseline is
-   read-only during generation.
-2. **KernelGen generation** — call `optimize_kernel` once per backend with a
-   backend-specific structural objective. Generated source goes only into the
-   new candidate directory. A response without usable code is rejected.
-3. **Deterministic hard gate** — run syntax, forbidden-pattern, launch-config,
-   runtime-branch, tile-bound, portable `triton.Config` ABI, autotune launch
-   binding, masked-pointer, scalar-mask, and config-dependent coverage checks.
-   This stage can reject a candidate but cannot certify it.
-4. **Semantic gate** — run the isolated 201-case CPU memory/semantic suite and
-   require all seven backend files to pass. When a file uses `@triton.autotune`,
-   run all cases for the first config and a boundary/stride/empty-case suite
-   for every remaining config; use the slower full sweep for release audits.
-   The suite includes `wide-dim-*` cases with NoPE/RoPE dimensions at and past
-   the 4096 tile cap, because a row covered by a single capped tile without a
-   column loop silently drops every column beyond that cap; the v19 baseline
-   covers them and any candidate that does not is rejected here.
-   CPU success is recorded separately from compiler evidence; failures return
-   to KernelGen repair before review.
-5. **Adversarial sub-agent review** — give the semantically passing candidate
-   and hard-gate report to the sub-agent using `subagent_review_prompt.md`. The
-   sub-agent must look for risks outside the hard-coded rules and label each
-   finding with exact evidence. Any unresolved `novel_findings` blocks
-   promotion; the reviewer cannot waive a risk merely because the local CPU
-   model passes. It may not edit the candidate.
-6. **Promotion/Arc** — package only when stages 3–5 pass. Arc is the only
-   source of target compilation and performance evidence. A failure feeds its
-   exact error back into a new KernelGen repair call; it is never patched
-   manually while claiming KernelGen generated the result.
+## Current target constraint
 
-The two review stages have different jobs: the deterministic stage prevents
-known invalid patterns from reaching the reviewer, while the adversarial stage
-is explicitly asked to discover new classes of errors. Neither stage is a
-substitute for target compilation.
+Arc v24 failed on Enflame Case 1 because the launch requested `grid.x = 131072`
+while that hardware path reported a limit of `65535`. Any future Enflame design
+must justify and bound its grid mapping for the actual row count (for example,
+a persistent/grid-stride scheme); do not generalize this Enflame limit to other
+chips without evidence. The failure is a concrete target regression, not a
+reason to add an unverified global rule.
 
-## Recommended request
+## Local gate commands
 
-Use the official Skill with a target platform and a bounded iteration count:
+Run from the repository root:
 
-```text
-Use kernelgen-flagos to optimize Task 78 concat_and_cast_mha_k on <TARGET>.
-Read competition/task78/concat_and_cast_mha_k_<TARGET>.py as the baseline and
-write candidates only below competition/task78/kernelgen/candidates/<RUN_ID>/.
-
-The operation is pure data movement and cast: copy k_nope into the prefix of k
-and broadcast k_rope[t,0,:] into the suffix of every head. Preserve arbitrary
-source strides and the output dtype conversion.
-
-Generate three structurally different candidates. At least one must explore a
-new tile/layout or TLE-Lite/TLE-Struct memory path; do not only tune launch
-constants. The public function must be exactly
-concat_and_cast_mha_k(k, k_nope, k_rope). Do not use native/PyTorch fallback,
-try/except fallback, or device-based bypass. Run 5 iterations with a 1.5x
-target and return the code, correctness report, and the structural diff.
-```
-
-If MCP is unavailable, stop and report that fact rather than silently replacing
-KernelGen with hand-written code under this workflow.
-
-## Promotion checks
-
-Run from the repository root before promoting a candidate:
-
-```bash
-python3 -m py_compile competition/task78/kernelgen/candidates/<RUN_ID>/*.py
-python3 competition/task78/validate_cpu.py --source-dir competition/task78/kernelgen/candidates/<RUN_ID> --all --autotune-sweep
-# Release audit (optional, slower):
-python3 competition/task78/validate_cpu.py --source-dir competition/task78/kernelgen/candidates/<RUN_ID> --all --autotune-sweep-full
+```sh
+python3 -m py_compile competition/task78/kernelgen/candidates/<run-id>/*.py
+python3 competition/task78/validate_cpu.py \
+  --source-dir competition/task78/kernelgen/candidates/<run-id> \
+  --all --autotune-sweep
+# First: save the output of a fresh Stage A blind sub-agent to blind-review.raw.txt/json.
+# Only then run the scanner and give its report to a different Stage B sub-agent.
+python3 competition/task78/kernelgen/review_candidate.py \
+  competition/task78/kernelgen/candidates/<run-id> \
+  --json competition/task78/kernelgen/candidates/<run-id>/static-review.json
+# Save the Stage B raw response and normalized receipt as reconciliation-review.raw.txt/json.
 python3 competition/task78/kernelgen/run_candidate_gate.py \
-  competition/task78/kernelgen/candidates/<RUN_ID> \
+  competition/task78/kernelgen/candidates/<run-id> \
+  --baseline-source-dir competition/task78 \
   --require-review \
-  --review-json competition/task78/kernelgen/candidates/<RUN_ID>/subagent-review.json \
-  --json competition/task78/kernelgen/candidates/<RUN_ID>/local-gate.json
-git diff --check
+  --blind-review-json competition/task78/kernelgen/candidates/<run-id>/blind-review.json \
+  --review-json competition/task78/kernelgen/candidates/<run-id>/reconciliation-review.json \
+  --compiler-review-json competition/task78/kernelgen/candidates/<run-id>/static-review.json \
+  --json competition/task78/kernelgen/candidates/<run-id>/local-gate.json
+python3 competition/task78/kernelgen/validate_package.py \
+  competition/task78/kernelgen/candidates/<run-id> \
+  competition/task78/kernelgen/candidates/<run-id>/submission.zip
 ```
 
-Before the candidate gate, run the deterministic compiler-risk scan:
+Use `--autotune-sweep-full` for a release audit when the candidate has
+autotuning. The CPU model checks source-level semantics and memory coverage;
+it does not compile Triton or predict any chip's score.
 
-```bash
-python3 competition/task78/kernelgen/review_candidate.py \
-  competition/task78/kernelgen/candidates/<RUN_ID> \
-  --json competition/task78/kernelgen/candidates/<RUN_ID>/static-review.json
-```
+## Score interpretation
 
-The candidate gate also runs this scan automatically. Passing an old
-`subagent-review.json` cannot bypass a newly discovered compiler-risk rule.
-The scan currently blocks runtime JIT branches, uncapped tile powers,
-non-power-of-two or unproven `num_warps`, non-portable `triton.Config` options,
-explicit tile constexpr kwargs on autotuned launches, masked negative pointer
-arithmetic, implicit scalar-mask broadcasting, autotune tile/grid mismatches,
-and the Hygon 1-D load-cast followed by broadcast pattern that failed in the
-v22 Arc run.
-
-Then send the candidate, `static-review.json`, and
-[`subagent_review_prompt.md`](subagent_review_prompt.md) to a read-only
-sub-agent. The sub-agent must perform an adversarial review: its main job is
-to search for risks not already covered by the deterministic rules, not merely
-to repeat the checklist. It must inspect every backend and write a receipt
-with this shape:
-
-```json
-{
-  "review_type": "read-only-subagent",
-  "review_mode": "adversarial-read-only",
-  "searched_for_novel_risks": true,
-  "reviewer": "<agent id or nickname>",
-  "candidate": "<run id>",
-  "reviewed_source_sha256": {"default": "..."},
-  "backend_findings": {
-    "default": {
-      "status": "pass",
-      "notes": [],
-      "evidence": [],
-      "novel_findings": []
-    }
-  },
-  "blockers": []
-}
-```
-
-The sub-agent is not trusted as a compiler or benchmark. Its receipt is a
-mandatory review checkpoint, `blockers` must be empty, and every
-`novel_findings` list must also be empty before packaging. A novel finding is a
-request for KernelGen repair or target smoke evidence, not a comment to carry
-silently into Arc.
-`status` must be one of `pass`, `fail`, or `unknown`; every backend must state
-what evidence supports the status and keep `novel_findings` separate from
-rule-confirmed findings. An unverified target compiler is recorded as
-evidence, not silently treated as a pass. The deterministic scan runs inside
-`run_candidate_gate.py`, so both layers must agree before packaging.
-The gate also compares every receipt hash with the current seven source files,
-and requires `candidate` to equal the candidate directory name, so a review
-cannot be reused after the candidate changes or copied between runs.
-The deterministic scan catches known high-risk patterns (including target ABI
-and autotune consistency); the sub-agent checks branch shapes, implicit
-broadcasts, pointer/mask safety, and whether the structural change is real. The
-sub-agent is deliberately a discovery layer, not just a checklist: if it finds
-a credible new class of risk, the candidate stops at the gate.
-The target compiler/device gate remains necessary.
-
-The candidate gate checks all seven files, the exact public entry, forbidden
-fallbacks/native concatenation, the 201-case CPU semantic suite plus the
-autotune boundary sweep, and—when `--require-review` is used—a passing
-sub-agent receipt with no unresolved novel findings. The full per-config sweep
-is available as a slower release audit.
-`validate_cpu.py --source-dir` makes the validator operate on
-an isolated candidate directory instead of silently reading the root baseline.
-Known autotune/cache-hint syntax is ignored only by the CPU model; target
-compilation is still a separate gate.
-
-The CPU validator checks source semantics and memory coverage only. It does
-not compile Triton, validate FlagTree lowering, or predict Arc performance.
-KernelGen responses with no executed correctness cases or no numeric target
-benchmark remain inconclusive. The final performance gate remains an actual
-Arc submission.
-
-For regression testing against the historical failures:
-
-```bash
-python3 competition/task78/kernelgen/review_candidate.py \
-  competition/task78/kernelgen/candidates/task78-v21-20260919-130000
-python3 competition/task78/kernelgen/review_candidate.py \
-  competition/task78/kernelgen/candidates/task78-v22-20260919-180120
-python3 competition/task78/kernelgen/test_review_candidate_regressions.py
-```
-
-The v21 scan must report runtime JIT branch blockers in the Iluvatar and
-MetaX files. The v22 scan must report the Enflame `num_warps=12` blockers and
-the Hygon cast-before-broadcast blocker.
+Keep the official raw result for every submission and a separate best-valid
+score for each chip. Record a run-level aggregate only when the competition
+marks every required target correct and supplies a valid score. When repeated
+measurements are available, retain raw timings, compare medians, and flag
+high-variance results; never silently discard an outlier or replace the
+historical best with a single noisy run.

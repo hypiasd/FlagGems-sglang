@@ -18,10 +18,12 @@ Before doing anything else, read:
 - `competition/task78/README.md`
 - the current baseline source file for the requested platform
 
-Use the official `kernelgen-flagos` Skill and its KernelGen MCP tools for code
-generation, optimization, and specialization. If the MCP service is not
-configured or its tools are unavailable, report that and stop this workflow;
-do not silently hand-write a result while claiming it came from KernelGen.
+Use the shared workflow v4 in
+`.agents/skills/kernelgen-flagos/references/reliability-gates.md` and the
+registered KernelGen MCP operation for code generation, optimization, and
+specialization. A config file is not proof that a tool is live. If the tool is
+unavailable, continue with read-only diagnosis and an experiment plan, but do
+not generate/patch source or claim a KernelGen run.
 
 Keep all generated files under
 `competition/task78/kernelgen/candidates/<run-id>/`. Never overwrite the root
@@ -38,19 +40,23 @@ candidate for promotion. Treat those checks as semantic evidence only; use
 the actual Arc result as the performance evidence. International A and B must
 be reported separately even when they share the generic source file.
 
-The candidate gate is intentionally conservative: it checks portable
+The deterministic candidate gate is intentionally conservative: it checks portable
 `triton.Config` options, autotune-to-launch parameter binding, masked pointer
 construction, scalar/vector mask shapes, and coverage for every visible
-autotune config. A read-only sub-agent receipt with any unresolved
-`novel_findings` is a hard failure and must trigger a KernelGen repair or a
-real target compile smoke test; it is not a note to carry into Arc.
+autotune config. Follow the Task78 two-agent prompt: first a fresh blind source
+auditor, then a different fresh reconciler after the static report exists. Keep
+both raw agent outputs, platform IDs, and exact source/baseline hashes. The
+gate checks receipt consistency; it does not prove the agents ran or that their
+reasoning is correct. A blocker or unresolved issue fails the candidate.
 
-For each new version, use the repository's Workflow v2 in
-`competition/task78/kernelgen/README.md`: KernelGen generation per backend,
-automatic deterministic hard gate, isolated semantic validation, adversarial
-read-only sub-agent review for novel risks, then deliberate packaging. Do not
-describe a candidate as ready merely because the CPU validator or sub-agent
-review passed.
+For each new version, use the Task 78 adapter in
+`competition/task78/kernelgen/README.md`: freeze the exact baseline and Arc
+result, make a structural hypothesis for every implementation backend, generate
+in isolation, run semantic/static checks, obtain the blind and reconciliation
+reviews when available, and separate an evaluation package from promotion of a
+new best. Do not describe a candidate as target-validated from CPU tests or AI
+review alone. Record generic-source results separately for International A and
+B, and keep every Arc attempt plus per-chip best scores in the results record.
 
 Do not place KernelGen Tokens, local MCP configuration, or benchmark credentials
 in Git. The repository-local MCP example is

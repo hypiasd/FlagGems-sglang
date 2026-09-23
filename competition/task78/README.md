@@ -1,26 +1,15 @@
 # Task 78: `concat_and_cast_mha_k`
 
-Current candidate: [v24 validation record](v24/validation.md) and
-[`flagos-task78-v24.zip`](flagos-task78-v24.zip) — locally gated through all
-five Stages including the adversarial read-only review, **not yet submitted to
-Arc**. The root submission files in this directory remain the Arc-proven **v19**
-set (8/8, avg 1.25x), so upload the ZIP rather than the root files.
-`flagos-task78-v23.zip` (5/8) is superseded.
+Latest official run: [v24 validation record](v24/validation.md), submitted to
+Arc on 09-20 21:31. It completed at 7/8, so Arc did not report a valid average
+score. The team's best valid aggregate remains v12 at 1.27×. The root submission
+sources remain the Arc-proven v19 set (8/8, 1.25×); v24 is an experiment, not a
+promoted best. If testing v24 again, use the archived ZIP, not the root files.
 
-v24 targets the three sub-1x chips of that v19 run (Ascend 0.14x, Enflame
-0.25x, Kunlunxin 0.27x) with portable structural changes and no repeat of the
-v22/v23 failure classes. Two adversarial review rounds were needed: the first
-receipt returned `fail` on Ascend and Hygon with four blockers — Ascend
-multiplied row indices in int32 before widening them and unrolled
-`tl.static_range` over a shape-derived trip count; Hygon had dropped the 2-D
-tile-product cap and used a broadcast-address 2-D rope load plus 2-D cast in the
-suffix-lowering area that failed on Hygon in v22. All four were repaired (Ascend
-now widens first and walks row blocks with the grid-stride loop v19 was accepted
-with; Hygon uses a fully 1-D row form) and the second receipt adjudicated them
-closed with no new blockers. Both receipts are kept in the ignored candidate
-run directory. Residual risks left for Arc, including Ascend `num_warps=8` (the
-first non-4 value on an Arc-tested Ascend launch) and `num_stages=2` on four
-files, are listed in the v24 validation record.
+v24 targeted the sub-1× chips from v19. It recovered two previously failing
+targets, but Enflame failed because its launch grid exceeded the reported
+hardware limit; several surviving chip scores regressed. The exact per-chip
+results and failure are recorded in the v24 validation record.
 
 While v24 was reviewed, the CPU validator gained twelve `wide-dim-*` cases
 because single-tile row coverage silently dropped every column past its tile
@@ -55,12 +44,11 @@ pass `--source-dir`; the reusable pre-Arc gate is
 These checks do not compile Triton or prove device performance. The local [validation record](v19/validation.md)
 contains the tested source hashes and results.
 
-For new candidates, promotion now requires two reviews before an Arc upload:
-the deterministic compiler-risk scan in
-`kernelgen/review_candidate.py`, followed by a read-only sub-agent review with
-an auditable receipt. A candidate with unresolved branch-shape, implicit
-broadcast, pointer/mask, or tile-bound blockers is not packaged. This reduces
-avoidable target compilation failures but does not replace Arc validation.
+For new candidates, follow the shared KernelGen workflow v4 and the Task 78
+adapter in `kernelgen/README.md`. Deterministic scans and independent source
+review are defect-finding gates, not substitutes for target execution. Keep
+package preparation separate from official submission and best-source
+promotion; record every Arc result and all eight target statuses.
 
 Historical version directories and ZIPs remain reproducible references.
 The user uploads candidates to FlagOS for real eight-chip evaluation.
@@ -74,9 +62,9 @@ treat v22 as a valid optimization baseline.
 
 ## KernelGen candidate workflow
 
-The repository-local KernelGen workflow is documented in
-[`kernelgen/README.md`](kernelgen/README.md). The official project Skill is
-under `.agents/skills/kernelgen-flagos/`; Task 78-specific routing and safety
-rules are under `.agents/skills/task78-kernelgen/`. KernelGen outputs remain
-isolated under `kernelgen/candidates/` until they pass the local validator and
-are deliberately promoted into a numbered version.
+The reusable KernelGen workflow is documented in
+`.agents/skills/kernelgen-flagos/references/reliability-gates.md`. Task 78
+adapter rules are in [`kernelgen/README.md`](kernelgen/README.md), with
+invocation guidance in `.agents/skills/task78-kernelgen/`. KernelGen outputs
+remain isolated under `kernelgen/candidates/` until they pass local checks and
+are deliberately prepared for evaluation.

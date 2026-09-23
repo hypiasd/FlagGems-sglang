@@ -18,6 +18,10 @@ import subprocess
 import sys
 import tempfile
 
+GENERIC_SCRIPTS = Path(__file__).resolve().parents[3] / ".agents/skills/kernelgen-flagos/scripts"
+sys.path.insert(0, str(GENERIC_SCRIPTS))
+import reviewer_protocol
+
 
 BACKENDS = ("default", "ascend", "enflame", "hygon", "iluvatar", "kunlunxin", "metax")
 PUBLIC = "concat_and_cast_mha_k"
@@ -53,83 +57,32 @@ def static_check(path: Path) -> dict:
     }
 
 
-def review_check(review_path: Path | None, required: bool,
-                 expected_hashes: dict[str, str], expected_candidate: str) -> dict:
-    """Validate the read-only sub-agent review receipt.
+def canonical_json_sha256(value: object) -> str:
+    return reviewer_protocol.canonical_json_sha256(value)
 
-    The gate cannot prove that a sub-agent really inspected the source, but it
-    can prevent a candidate from being promoted without an explicit review
-    receipt and can reject receipts that still contain unresolved blockers.
-    The receipt is deliberately small and human-auditable.
-    """
-    if review_path is None:
-        return {
-            "required": required,
-            "present": False,
-            "passed": not required,
-            "error": "review receipt was not supplied" if required else None,
-        }
-    try:
-        review = json.loads(review_path.read_text(encoding="utf-8"))
-    except Exception as exc:
-        return {
-            "required": required,
-            "present": False,
-            "passed": False,
-            "error": f"could not read review receipt: {exc}",
-        }
-    blockers = review.get("blockers")
-    findings = review.get("backend_findings")
-    observed_hashes = review.get("reviewed_source_sha256")
-    candidate_match = review.get("candidate") == expected_candidate
-    findings_shape_valid = (
-        isinstance(findings, dict)
-        and all(
-            isinstance(findings.get(backend), dict)
-            and findings[backend].get("status") in {"pass", "fail", "unknown"}
-            and isinstance(findings[backend].get("notes"), list)
-            and isinstance(findings[backend].get("evidence"), list)
-            and isinstance(findings[backend].get("novel_findings"), list)
-            for backend in expected_hashes
-        )
+
+def source_hashes(source_dir: Path | None) -> tuple[dict[str, str], list[str]]:
+    if source_dir is None:
+        return {}, ["source directory was not supplied"]
+    hashes = {}
+    missing = []
+    for backend in BACKENDS:
+        path = source_dir / source_name(backend)
+        if path.is_file():
+            hashes[backend] = hashlib.sha256(path.read_bytes()).hexdigest()
+        else:
+            missing.append(str(path))
+    return hashes, missing
+
+
+def review_check(blind_path: Path | None, reconciliation_path: Path | None,
+                 static_report: dict, required: bool,
+                 expected_hashes: dict[str, str], expected_baseline_hashes: dict[str, str],
+                 expected_candidate: str, expected_baseline: str) -> dict:
+    return reviewer_protocol.validate(
+        blind_path, reconciliation_path, static_report, required,
+        expected_hashes, expected_baseline_hashes, expected_candidate, expected_baseline,
     )
-    hashes_match = (
-        isinstance(observed_hashes, dict)
-        and all(observed_hashes.get(backend) == digest
-                for backend, digest in expected_hashes.items())
-    )
-    novel_findings = []
-    if findings_shape_valid:
-        for backend in expected_hashes:
-            novel_findings.extend(
-                {"backend": backend, **item}
-                for item in findings[backend]["novel_findings"]
-            )
-    passed = (
-        review.get("review_type") == "read-only-subagent"
-        and review.get("review_mode") == "adversarial-read-only"
-        and review.get("searched_for_novel_risks") is True
-        and candidate_match
-        and review.get("reviewer")
-        and findings_shape_valid
-        and isinstance(blockers, list)
-        and not blockers
-        and not novel_findings
-        and hashes_match
-    )
-    return {
-        "required": required,
-        "present": True,
-        "passed": bool(passed),
-        "path": str(review_path),
-        "blocker_count": len(blockers) if isinstance(blockers, list) else None,
-        "novel_finding_count": len(novel_findings),
-        "novel_findings": novel_findings,
-        "findings_shape_valid": findings_shape_valid,
-        "candidate_match": candidate_match,
-        "hashes_match": hashes_match,
-        "error": None if passed else "review receipt is missing required fields or has blockers",
-    }
 
 
 def main(argv=None) -> int:
@@ -137,7 +90,11 @@ def main(argv=None) -> int:
     parser.add_argument("source_dir", type=Path)
     parser.add_argument("--json", dest="json_path", type=Path)
     parser.add_argument("--review-json", type=Path,
-                        help="read-only sub-agent review receipt")
+                        help="second independent sub-agent reconciliation receipt")
+    parser.add_argument("--blind-review-json", type=Path,
+                        help="first-pass receipt from a fresh reviewer who was not shown static findings")
+    parser.add_argument("--baseline-source-dir", type=Path,
+                        help="exact baseline source directory reviewed by both agents")
     parser.add_argument("--require-review", action="store_true",
                         help="reject candidates without a passing review receipt")
     parser.add_argument("--compiler-review-json", type=Path,
@@ -233,9 +190,19 @@ def main(argv=None) -> int:
         for item in static
         if item.get("backend") and item.get("sha256")
     }
-    review = review_check(
-        args.review_json, args.require_review, expected_hashes, source_dir.name
+    expected_baseline_hashes, missing_baseline = source_hashes(
+        args.baseline_source_dir.resolve() if args.baseline_source_dir else None
     )
+    review = review_check(
+        args.blind_review_json, args.review_json, compiler_review,
+        args.require_review, expected_hashes, expected_baseline_hashes,
+        source_dir.name,
+        args.baseline_source_dir.name if args.baseline_source_dir else "",
+    )
+    review["missing_baseline_sources"] = missing_baseline
+    if args.require_review and missing_baseline:
+        review["passed"] = False
+        review["error"] = "baseline source directory is incomplete"
     passed = (
         static_passed
         and semantic.get("passed") is True

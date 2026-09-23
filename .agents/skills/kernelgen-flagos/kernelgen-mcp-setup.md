@@ -16,10 +16,10 @@
 
 # KernelGen MCP Configuration Check & Auto-Setup
 
-This file is responsible for checking whether the `kernelgen-mcp` MCP service is configured,
-and guiding the user through automatic configuration if it is not.
-Before any sub-skill (generate / optimize / specialize) executes, `SKILL.md` dispatches to
-this file to ensure MCP is ready before proceeding to subsequent workflows.
+This file checks project-local configuration and explains setup. A config file
+only proves that configuration was written; it does not prove that the current
+agent session connected the server or exposed its tools. Runtime availability
+must be checked in the current tool registry before calling KernelGen.
 
 ---
 
@@ -35,8 +35,21 @@ For each file:
 - If the file exists, parse the JSON and check whether `mcpServers` contains a key that includes `kernelgen` (case-insensitive)
 
 **Decision rules**:
-- Found in any file → **MCP is configured**, return immediately and continue the workflow
-- Not found in either file → **MCP is not configured**, proceed to Step 2
+- Found in any file → record **configured** and continue to the runtime check below.
+- Not found in either file → **not configured**, proceed to Step 2.
+
+After reading configuration, check whether the required operation (`generate_kernel`,
+`optimize_kernel`, or `specialize_kernel`) is actually visible and callable in the
+current agent's tool registry. Never infer this from the JSON key alone.
+
+- Configured and callable → continue to the selected sub-skill.
+- Configured but not callable → report **configured, runtime unavailable**. Do not
+  ask for or rotate the token, rewrite the config, or claim that a restart will
+  definitely fix it. If this config was just added or changed, ask the user to
+  restart/reload once; otherwise check the client connection and resume after the
+  tool is exposed. Code generation must remain stopped, though read-only diagnosis
+  and an experiment plan may continue.
+- Not configured → proceed to Step 2.
 
 ---
 
@@ -57,8 +70,8 @@ competition/task78/kernelgen/mcp.json.example and replace the token locally.
 Do not paste the token into chat or commit .mcp.json. Then restart the agent.
 ```
 
-Stop here. Do not continue to a generation, optimization, or specialization
-workflow until the agent has been restarted and the configuration is visible.
+Stop code generation here. Read-only diagnosis may continue, but do not claim a
+KernelGen run until the current agent can call the required tool.
 
 ---
 
@@ -85,7 +98,7 @@ filled in locally:
 
 **Important notes**:
 - The MCP service URL is fixed as `https://kernelgen.flagos.io/sse/` — the user does not need to provide it
-- The key name uses `kernelgen-server` (consistent with the MCP tool names `mcp__kernelgen-server__*`)
+- The example server key is `kernelgen-server`; the actual operation names must still be taken from the live tool registry, not inferred from this key.
 - Never overwrite other configuration entries in the file
 
 ---
@@ -98,4 +111,6 @@ After the user has configured the local file, output the following to the user:
 MCP configuration should now be present in the local .mcp.json. Please restart the agent for the configuration to take effect, then re-run the command.
 ```
 
-**Stop here** — do not continue executing subsequent sub-skill workflows. When the user restarts and re-triggers the skill, Step 1 will detect that the configuration already exists and pass through directly.
+**Stop code generation here.** When the user restarts and re-triggers the skill,
+check the live tool registry again; do not assume that configuration visibility
+means runtime availability.

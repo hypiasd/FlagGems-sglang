@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Regression tests for compiler risks found by the historical Arc runs."""
+"""Static-rule regressions and two-stage reviewer-gate protocol tests."""
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -43,23 +45,19 @@ def inspect_zip(name: str) -> dict:
         return {"passed": not blockers, "blockers": blockers}
 
 
-class HistoricalArcFailureRegression(unittest.TestCase):
-    def test_v21_catches_known_runtime_branches(self) -> None:
+class StaticRulePatternRegression(unittest.TestCase):
+    """These assert scanner behavior, not independent-agent capability."""
+
+    def test_v21_contains_jit_branch_patterns_for_rule_regression(self) -> None:
         report = inspect_zip("flagos-task78-v21.zip")
-        failures = {
-            (item["backend"], item["kind"])
-            for item in report["blockers"]
-        }
+        failures = {(item["backend"], item["kind"]) for item in report["blockers"]}
         self.assertFalse(report["passed"])
         self.assertIn(("iluvatar", "runtime-branch-in-jit"), failures)
         self.assertIn(("metax", "runtime-branch-in-jit"), failures)
 
-    def test_v22_catches_known_target_compiler_failures(self) -> None:
+    def test_v22_contains_known_target_risk_patterns_for_rule_regression(self) -> None:
         report = inspect_zip("flagos-task78-v22.zip")
-        failures = {
-            (item["backend"], item["kind"])
-            for item in report["blockers"]
-        }
+        failures = {(item["backend"], item["kind"]) for item in report["blockers"]}
         self.assertFalse(report["passed"])
         self.assertIn(("enflame", "invalid-num-warps"), failures)
         self.assertIn(("hygon", "hygon-cast-before-broadcast"), failures)
@@ -93,8 +91,7 @@ def concat_and_cast_mha_k(out):
 """,
             "concat_and_cast_mha_k_enflame.py",
         )
-        kinds = {item["kind"] for item in report["blockers"]}
-        self.assertIn("autotune-explicit-tile-constexpr", kinds)
+        self.assertIn("autotune-explicit-tile-constexpr", {item["kind"] for item in report["blockers"]})
 
     def test_rejects_masked_negative_pointer_and_scalar_mask(self) -> None:
         report = self.inspect_source(
@@ -131,36 +128,179 @@ def concat_and_cast_mha_k(out, dn):
 """,
             "concat_and_cast_mha_k_iluvatar.py",
         )
-        self.assertIn("autotune-tile-grid-mismatch",
-                      {item["kind"] for item in report["blockers"]})
+        self.assertIn("autotune-tile-grid-mismatch", {item["kind"] for item in report["blockers"]})
 
-    def test_subagent_novel_finding_is_not_a_soft_warning(self) -> None:
+
+class TwoStageReviewProtocolTests(unittest.TestCase):
+    hashes = {"default": "candidate-digest"}
+    baseline_hashes = {"default": "baseline-digest"}
+    static = {
+        "backends": {"default": {"findings": [{
+            "severity": "warning", "kind": "power-of-two-bound", "line": 4,
+            "message": "check bound",
+        }]}}
+    }
+
+    def blind_receipt(self, **overrides):
         receipt = {
-            "review_type": "read-only-subagent",
-            "review_mode": "adversarial-read-only",
-            "searched_for_novel_risks": True,
-            "reviewer": "test-reviewer",
+            "protocol_version": 3,
+            "review_mode": "blind-independent",
+            "reviewer_agent_id": "agent-A",
+            "reviewer_name": "reviewer A",
             "candidate": "candidate",
-            "reviewed_source_sha256": {"default": "digest"},
-            "backend_findings": {
-                "default": {
-                    "status": "unknown",
-                    "notes": [],
-                    "evidence": [],
-                    "novel_findings": [{"kind": "new-risk"}],
-                }
-            },
-            "blockers": [],
+            "baseline": "baseline",
+            "reviewed_source_sha256": self.hashes,
+            "reviewed_baseline_sha256": self.baseline_hashes,
+            "backend_coverage": {"default": {
+                "status": "complete", "checks_run": ["dataflow", "bounds"],
+                "analysis_summary": ["rows map to independent output intervals"],
+                "evidence": ["kernel.py:1-4"],
+            }},
+            "findings": [],
+            "verdict": "pass",
+            "limitations": ["target compiler not available"],
         }
-        with tempfile.TemporaryDirectory(prefix="task78-review-receipt-") as directory:
-            path = Path(directory) / "review.json"
-            import json
-            path.write_text(json.dumps(receipt), encoding="utf-8")
+        receipt.update(overrides)
+        return receipt
+
+    def test_protocol_requires_blind_and_distinct_reconciliation_receipts(self):
+        with tempfile.TemporaryDirectory(prefix="task78-two-stage-") as directory:
+            root = Path(directory)
+            blind_path = root / "blind.json"
+            final_path = root / "reconciliation.json"
+            blind_path.write_text(json.dumps(self.blind_receipt()), encoding="utf-8")
+            blind_digest = hashlib.sha256(blind_path.read_bytes()).hexdigest()
+            static_id = "static:" + run_candidate_gate.canonical_json_sha256(
+                {"target_id": "default", **self.static["backends"]["default"]["findings"][0]}
+            )
+            final = {
+                "protocol_version": 3,
+                "review_mode": "independent-reconciliation",
+                "reviewer_agent_id": "agent-B",
+                "reviewer_name": "reviewer B",
+                "candidate": "candidate",
+                "baseline": "baseline",
+                "reviewed_source_sha256": self.hashes,
+                "reviewed_baseline_sha256": self.baseline_hashes,
+                "blind_receipt_sha256": blind_digest,
+                "static_report_sha256": run_candidate_gate.canonical_json_sha256(self.static),
+                "dispositions": [{
+                    "finding_id": static_id, "decision": "residual",
+                    "rationale": "tile is capped by the wrapper at the call site",
+                }],
+                "additional_findings": [],
+                "verdict": "pass",
+            }
+            final_path.write_text(json.dumps(final), encoding="utf-8")
             result = run_candidate_gate.review_check(
-                path, True, {"default": "digest"}, "candidate"
+                blind_path, final_path, self.static, True, self.hashes,
+                self.baseline_hashes, "candidate", "baseline",
+            )
+        self.assertTrue(result["passed"], result)
+        self.assertEqual(len(result["residuals"]), 1)
+
+    def test_unresolved_or_missing_static_disposition_fails(self):
+        with tempfile.TemporaryDirectory(prefix="task78-two-stage-") as directory:
+            root = Path(directory)
+            blind_path = root / "blind.json"
+            final_path = root / "reconciliation.json"
+            blind_path.write_text(json.dumps(self.blind_receipt()), encoding="utf-8")
+            final = {
+                "protocol_version": 3,
+                "review_mode": "independent-reconciliation",
+                "reviewer_agent_id": "agent-B",
+                "reviewer_name": "reviewer B",
+                "candidate": "candidate",
+                "baseline": "baseline",
+                "reviewed_source_sha256": self.hashes,
+                "reviewed_baseline_sha256": self.baseline_hashes,
+                "blind_receipt_sha256": hashlib.sha256(blind_path.read_bytes()).hexdigest(),
+                "static_report_sha256": run_candidate_gate.canonical_json_sha256(self.static),
+                "dispositions": [],
+                "additional_findings": [],
+                "verdict": "pass",
+            }
+            final_path.write_text(json.dumps(final), encoding="utf-8")
+            result = run_candidate_gate.review_check(
+                blind_path, final_path, self.static, True, self.hashes,
+                self.baseline_hashes, "candidate", "baseline",
             )
         self.assertFalse(result["passed"])
-        self.assertEqual(result["novel_finding_count"], 1)
+        self.assertFalse(result["reconciliation_valid"])
+
+    def test_unknown_backend_coverage_cannot_pass_complete_reconciliation(self):
+        with tempfile.TemporaryDirectory(prefix="task78-two-stage-") as directory:
+            root = Path(directory)
+            blind_path = root / "blind.json"
+            blind = self.blind_receipt(backend_coverage={"default": {
+                "status": "unknown", "checks_run": ["dataflow"],
+                "analysis_summary": ["not enough context"],
+                "evidence": ["kernel.py:1"],
+            }})
+            blind_path.write_text(json.dumps(blind), encoding="utf-8")
+            static_finding = self.static["backends"]["default"]["findings"][0]
+            static_id = "static:" + run_candidate_gate.canonical_json_sha256(
+                {"target_id": "default", **static_finding}
+            )
+            final_path = root / "reconciliation.json"
+            final_path.write_text(json.dumps({
+                "protocol_version": 3,
+                "review_mode": "independent-reconciliation",
+                "reviewer_agent_id": "agent-B",
+                "reviewer_name": "reviewer B",
+                "candidate": "candidate",
+                "baseline": "baseline",
+                "reviewed_source_sha256": self.hashes,
+                "reviewed_baseline_sha256": self.baseline_hashes,
+                "blind_receipt_sha256": hashlib.sha256(blind_path.read_bytes()).hexdigest(),
+                "static_report_sha256": run_candidate_gate.canonical_json_sha256(self.static),
+                "dispositions": [{
+                    "finding_id": static_id, "decision": "residual",
+                    "rationale": "warning was inspected against the wrapper bound",
+                }],
+                "additional_findings": [],
+                "verdict": "pass",
+            }), encoding="utf-8")
+            result = run_candidate_gate.review_check(
+                blind_path, final_path, self.static, True, self.hashes,
+                self.baseline_hashes, "candidate", "baseline",
+            )
+        self.assertFalse(result["passed"])
+        self.assertFalse(result["blind_review_valid"])
+
+    def test_old_single_receipt_cannot_pass(self):
+        with tempfile.TemporaryDirectory(prefix="task78-two-stage-") as directory:
+            path = Path(directory) / "old.json"
+            path.write_text(json.dumps({
+                "review_type": "read-only-subagent",
+                "review_mode": "adversarial-read-only",
+                "searched_for_novel_risks": True,
+                "blockers": [],
+            }), encoding="utf-8")
+            result = run_candidate_gate.review_check(
+                path, None, self.static, True, self.hashes,
+                self.baseline_hashes, "candidate", "baseline",
+            )
+        self.assertFalse(result["passed"])
+
+    def test_blocker_in_blind_receipt_cannot_be_softened(self):
+        with tempfile.TemporaryDirectory(prefix="task78-two-stage-") as directory:
+            root = Path(directory)
+            blind_path = root / "blind.json"
+            blind = self.blind_receipt(findings=[{
+                "id": "A-1", "target_id": "default", "severity": "blocker",
+                "location": "kernel.py:10", "mechanism": "bad bounds",
+                "activation": "tail shape", "confidence": "high", "evidence": ["line 10"],
+            }])
+            blind_path.write_text(json.dumps(blind), encoding="utf-8")
+            final_path = root / "reconciliation.json"
+            final_path.write_text("{}", encoding="utf-8")
+            result = run_candidate_gate.review_check(
+                blind_path, final_path, self.static, True, self.hashes,
+                self.baseline_hashes, "candidate", "baseline",
+            )
+        self.assertFalse(result["passed"])
+        self.assertFalse(result["blind_review_valid"])
 
 
 if __name__ == "__main__":

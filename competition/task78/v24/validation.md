@@ -1,8 +1,8 @@
 # v24 validation record
 
-v24 was not submitted to Arc at the time of writing, so this record contains
-local evidence only: no target compilation, device result, or speedup is
-claimed here.
+This record separates local evidence from the subsequent official Arc result.
+The local gates below do not imply target compilation, correctness, or
+performance; Arc evaluated the packaged source on 2026-09-20.
 
 ## Gate results
 
@@ -31,13 +31,17 @@ compiler, target-device test, or performance benchmark.
 | concat_and_cast_mha_k_kunlunxin.py | 2f7f8a9b82eec6cd5eca85ea4a5a43b29f3612e3b36738938ba5227e79b4dad1 |
 | concat_and_cast_mha_k_metax.py | 8641369bae965911cfdceec1122df4a7c1e0bb58afaa45beca75dcd4bd0afad9 |
 
-Reproduce from the project root:
+The recorded v24 result predates workflow v4 and used the former one-receipt
+review protocol. Its archived `local-gate.json` and review artifacts remain the
+historical record; they do not satisfy the current two-agent gate. Re-running
+v24 through today's gate requires fresh blind and reconciliation agents bound
+to the current baseline/source hashes. The Arc outcome below is unchanged.
+
+Reproduce the non-review portions from the project root:
 
 ```sh
-python3 competition/task78/kernelgen/run_candidate_gate.py \
+python3 competition/task78/kernelgen/review_candidate.py \
   competition/task78/kernelgen/candidates/task78-v24-20260920-000454 \
-  --require-review \
-  --review-json competition/task78/kernelgen/candidates/task78-v24-20260920-000454/subagent-review.json
 unzip -t competition/task78/flagos-task78-v24.zip
 ```
 
@@ -68,7 +72,7 @@ unzip -t competition/task78/flagos-task78-v24.zip
    the shipped one as `subagent-review-first-round.json`, and the rejected gate
    run as `local-gate-first-round.json`, in the candidate directory.
 
-## Residual risks left for Arc
+## Review notes before Arc
 
 None of these was judged a blocker by the second review; they are recorded so
 an Arc failure can be triaged quickly.
@@ -87,3 +91,26 @@ an Arc failure can be triaged quickly.
   rebound (`block = block.to(tl.int64)`) rather than copied to a new name as in
   v19; the branch is constexpr-pruned unless `WIDE` is true, so it cannot reach
   an Arc shape.
+
+## Arc result (2026-09-20 21:31)
+
+The package completed with 7/8 targets. Arc reported no aggregate speedup,
+because Enflame failed. The per-target results were:
+
+| Target | Result |
+| --- | ---: |
+| 天数智芯 / Iluvatar | 1.74× |
+| 沐曦 / MetaX | 0.89× |
+| 燧原 / Enflame | Failed |
+| 海光 / Hygon | 1.26× |
+| 昆仑芯 / Kunlunxin | 0.31× |
+| 华为 / Ascend | 0.21× |
+| International A | 1.57× |
+| International B | 1.71× |
+
+Enflame Case 1 failed at launch: `grid.x` required 131072, while the reported
+hardware limit was 65535. This is the confirmed v24 blocker. v24 recovered
+Kunlunxin and Ascend from earlier failed submissions, but both are far below
+1×; Iluvatar, MetaX, Hygon, and International A/B also scored below their v23
+results. This run therefore does not replace the best valid aggregate (v12,
+1.27×) or the known complete v19 reference (8/8, 1.25×).

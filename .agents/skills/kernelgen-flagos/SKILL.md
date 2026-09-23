@@ -79,9 +79,11 @@ All sub-skill files are located in the **same directory** as this `SKILL.md` fil
 
 ## Routing Protocol — Follow This BEFORE Doing Anything Else
 
-### Phase 0: MCP Configuration Check
+### Phase 0: MCP Configuration and Runtime Check
 
-Before anything else, ensure the `kernelgen-server` MCP service is configured and ready.
+Before any generation/optimization call, distinguish local configuration from live
+tool availability. A `.mcp.json` entry does not prove that this session connected
+the server or registered its tools.
 
 Use the Glob tool to find `kernelgen-mcp-setup.md` in this skill's directory:
 
@@ -91,10 +93,14 @@ Glob: **/skills/kernelgen-flagos/kernelgen-mcp-setup.md
 
 Then use the Read tool to read the matched file and **follow its instructions exactly**.
 
-- If MCP is already configured → proceed to Phase 1.
+- If the required operation is visible in the current tool registry → proceed to Phase 1.
 - If MCP is not configured → the setup skill will guide the user through configuration.
-  Once configuration is written and the user is prompted to restart, **stop here** — do not
-  continue to Phase 1.
+  Stop code generation until the tool is callable. Read-only repository diagnosis
+  and experiment planning may continue without making source changes.
+- If configuration exists but the required tool is not callable → do not request a
+  new token, rewrite config, or assume repeated restarts will fix it. Continue only
+  with read-only diagnosis and a bounded experiment plan; stop code generation until
+  the tool is exposed.
 
 ### Phase 1: Detect Repository Type
 
@@ -169,18 +175,19 @@ Then use the Read tool to read the matched path.
 **Important rules:**
 1. **Always detect first, dispatch second.** Never skip detection.
 2. **Read the entire sub-skill file** before starting execution — do not partially read it.
-3. **Follow the sub-skill instructions exactly** as if they were the main SKILL.md. All steps,
-   rules, and protocols in the sub-skill apply fully.
+3. **Follow the sub-skill** for framework- and mode-specific steps. The shared
+   `references/reliability-gates.md` is normative for live tool availability,
+   evidence states, correctness/performance claims, and promotion; it takes
+   precedence if a sub-skill conflicts with it.
 4. **Do not mix sub-skills.** Once you dispatch to a sub-skill, follow it to completion.
 5. If the user explicitly requests a specific sub-skill (e.g., "use the FlagGems version"),
    honor that request regardless of auto-detection results.
-6. **CRITICAL — MCP is mandatory**: ALL operator code generation MUST go through the
-   `mcp__kernelgen-mcp__generate_kernel` MCP tool. Optimization uses
-   `mcp__kernelgen-mcp__optimize_kernel`, and platform specialization uses
-   `mcp__kernelgen-mcp__specialize_kernel`. NEVER generate Triton kernels, PyTorch
-   wrappers, or operator implementations yourself. If MCP is not configured, not reachable,
-   or fails after all retries, STOP and report the issue — do NOT fall back to writing code
-   manually.
+6. **KernelGen generation must use the live registered tool** for the selected
+   operation (`generate_kernel`, `optimize_kernel`, or `specialize_kernel`). Do not
+   guess a tool namespace from a config key. If the tool is not callable, do not
+   create implementation code under the KernelGen workflow; read-only diagnosis
+   and a ready-to-run request may still be delivered. Do not silently substitute
+   hand-written code and label it KernelGen output.
 
 ### Phase 3: Feedback Handling
 
@@ -206,21 +213,34 @@ Apply these gates after every MCP call:
    name mismatches, and semantic changes.
 4. Run repository semantic tests separately from target compilation and
    performance tests. Never describe a CPU model as device validation.
-5. Require a target correctness report and numeric performance measurement
-   before promotion. If the target did not execute tests, mark the run
-   `inconclusive`.
-6. Use a read-only sub-agent review for non-trivial kernels before consuming a
-   scarce target submission. The sub-agent may report issues but must not
-   silently alter the candidate.
+5. Preserve the unmodified raw target-run result, provider invocation/job ID,
+   exact candidate/baseline hashes, and the adapter's complete required case
+   set. A normalized manifest alone is a report claim, not proof of execution;
+   a subset benchmark is diagnostic only.
+6. For non-trivial kernels, use the two-stage protocol in
+   `references/reviewer-protocol.md`: a fresh blind source auditor first, then
+   a different fresh reviewer after static findings are available. Save both
+   raw tool responses and receipts. The gate checks their consistency, not the
+   truth of their reasoning or platform invocation.
 7. Promote only after the candidate beats the recorded baseline under the same
    measurement method. Keep rejected and inconclusive artifacts isolated.
 
-For a deterministic first pass over a saved response, run:
+For a deterministic first pass over a saved response, run the candidate phase:
+
+```bash
+python3 scripts/kernelgen_gate.py response.json \
+  --phase candidate --public-symbol <public_function>
+```
+
+Target reports use a separate manifest tied to exact candidate and baseline
+files, plus the unmodified raw runner result:
 
 ```bash
 python3 scripts/kernelgen_gate.py response.json \
   --phase target --public-symbol <public_function> \
-  --baseline-speedup <baseline>
+  --target-evidence target-evidence.json \
+  --candidate-source candidate.py --baseline-source baseline.py \
+  --raw-target-result target-result.raw.json
 ```
 
 Read [`references/reliability-gates.md`](references/reliability-gates.md) when
