@@ -44,7 +44,7 @@ pass `--source-dir`; the reusable pre-Arc gate is
 These checks do not compile Triton or prove device performance. The local [validation record](v19/validation.md)
 contains the tested source hashes and results.
 
-For new candidates, follow the shared KernelGen workflow v4 and the Task 78
+For new candidates, follow the shared KernelGen workflow v5 and the Task 78
 adapter in `kernelgen/README.md`. Deterministic scans and independent source
 review are defect-finding gates, not substitutes for target execution. Keep
 package preparation separate from official submission and best-source

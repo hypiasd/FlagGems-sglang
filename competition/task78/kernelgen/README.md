@@ -1,6 +1,6 @@
 # Task 78 KernelGen adapter
 
-The reusable KernelGen workflow v4 is defined in
+The reusable KernelGen workflow v5 is defined in
 `.agents/skills/kernelgen-flagos/references/reliability-gates.md`. This file
 adds only Task 78's operator contract, backend matrix, submission policy, and
 observed target constraints. The general workflow's evidence requirements
@@ -87,15 +87,19 @@ A and B. A shared code change is not proof of shared target compatibility.
    `run_candidate_gate.py` with both receipts and the exact baseline directory.
    This gate can reject semantic/source risks; it cannot certify a vendor
    compiler, target runtime, or speedup.
-8. **Target evidence and decision.** Prefer a real remote target compile,
-   correctness run, and benchmark when KernelGen supports that backend. Bind
-   the report to exact source/baseline hashes, compiler/runtime, the complete
-   adapter-declared case set, all pass counts, timing method, invocation/job
-   ID, and unmodified raw result. A self-authored manifest is a claim; a case
-   subset is diagnostic only. If no trusted target runner covers a chip, a
-   package may be labeled only as an unvalidated, user-controlled Arc
-   experiment; it is not a performance improvement and does not replace the
-   best source.
+8. **Target evidence and decision.** A candidate is not submission-ready until
+   a trusted live runner has preflighted every backend: invoked the real public
+   entrypoint/config path, compiled and exercised all declared configurations,
+   queried live device limits and checked the full case/config launch matrix,
+   then differentially checked every required correctness case. Bind the
+   report to exact source/baseline hashes, compiler/runtime, the complete
+   adapter-declared case/config sets, all pass counts, queried device limits,
+   timing method, invocation/job ID, and unmodified raw result. A self-authored
+   manifest is a claim; a case subset is diagnostic only. If no trusted target
+   runner covers a chip, the candidate stays inconclusive and is not
+   submission-ready. Only an explicit user choice may turn it into a clearly
+   labeled diagnostic Arc experiment; that does not establish correctness or
+   performance and does not replace the best source.
 9. **Package integrity.** Validate the final ZIP against the reviewed candidate
    directory with `validate_package.py`. It must contain exactly the seven
    root-level operator files, with byte-identical contents and recorded hashes.
@@ -138,6 +142,16 @@ python3 competition/task78/kernelgen/run_candidate_gate.py \
   --review-json competition/task78/kernelgen/candidates/<run-id>/reconciliation-review.json \
   --compiler-review-json competition/task78/kernelgen/candidates/<run-id>/static-review.json \
   --json competition/task78/kernelgen/candidates/<run-id>/local-gate.json
+# After the trusted target runner has returned raw results, run the schema-v2
+# target evidence gate separately for all eight target profiles. The generic
+# source uses distinct manifests for International A and International B.
+python3 .agents/skills/kernelgen-flagos/scripts/kernelgen_gate.py \
+  <saved-kernelgen-response.json> --phase target \
+  --public-symbol concat_and_cast_mha_k \
+  --target-evidence <target-evidence-v2.json> \
+  --candidate-source <exact-candidate-source.py> \
+  --baseline-source <exact-baseline-source.py> \
+  --raw-target-result <unmodified-live-result.json>
 python3 competition/task78/kernelgen/validate_package.py \
   competition/task78/kernelgen/candidates/<run-id> \
   competition/task78/kernelgen/candidates/<run-id>/submission.zip

@@ -19,7 +19,7 @@ def response(code=CODE):
 def evidence(candidate=CODE, baseline=BASELINE):
     signature = "x: shape=[32, 64], dtype=float16, strides=[64, 1]"
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "run_id": "run-001",
         "target": {
             "backend": "test-backend",
@@ -34,9 +34,37 @@ def evidence(candidate=CODE, baseline=BASELINE):
             "suite_id": "suite-001",
             "total_cases": 1,
             "passed_cases": 1,
+            "case_contract": {
+                "case_set_id": "suite-001-cases-v1",
+                "required_case_ids": ["case-001"],
+            },
             "cases": [{
                 "case_id": "case-001",
                 "input_signature": signature,
+                "status": "passed",
+            }],
+        },
+        "target_preflight": {
+            "case_set_id": "suite-001-cases-v1",
+            "api_checks": {
+                "public_entrypoint": "passed",
+                "launch_binding": "passed",
+                "backend_config_api": "passed",
+            },
+            "required_config_ids": ["cfg-0"],
+            "config_results": [{
+                "config_id": "cfg-0",
+                "compile_status": "passed",
+                "entrypoint_status": "passed",
+            }],
+            "device_limits": {
+                "grid_max": [65535, 65535, 65535],
+                "source": "live-device-query",
+            },
+            "launch_checks": [{
+                "case_id": "case-001",
+                "config_id": "cfg-0",
+                "grid": [1, 1, 1],
                 "status": "passed",
             }],
         },
@@ -90,9 +118,82 @@ class KernelGenGateTests(unittest.TestCase):
 
     def test_unknown_manifest_schema_is_inconclusive(self):
         manifest = evidence()
-        manifest["schema_version"] = 2
+        manifest["schema_version"] = 3
         result = self.call_gate(manifest=manifest)
         self.assertEqual(result["state"], "inconclusive")
+
+    def test_missing_runtime_preflight_cannot_be_reported_as_target_pass(self):
+        manifest = evidence()
+        del manifest["target_preflight"]
+        result = self.call_gate(manifest=manifest)
+        self.assertEqual(result["state"], "inconclusive")
+        self.assertIn("missing per-target runtime preflight", result["reasons"])
+
+    def test_failed_config_compile_or_public_entrypoint_is_rejected(self):
+        for field in ("compile_status", "entrypoint_status"):
+            with self.subTest(field=field):
+                manifest = evidence()
+                manifest["target_preflight"]["config_results"][0][field] = "failed"
+                result = self.call_gate(manifest=manifest)
+                self.assertEqual(result["state"], "rejected")
+                self.assertIn(
+                    "target config compile or wrapper invocation failed: cfg-0",
+                    result["reasons"],
+                )
+
+    def test_backend_config_api_failure_is_rejected(self):
+        manifest = evidence()
+        manifest["target_preflight"]["api_checks"]["backend_config_api"] = "failed"
+        result = self.call_gate(manifest=manifest)
+        self.assertEqual(result["state"], "rejected")
+        self.assertIn("target API preflight failed: backend_config_api", result["reasons"])
+
+    def test_runtime_config_matrix_must_cover_every_declared_variant(self):
+        manifest = evidence()
+        manifest["target_preflight"]["required_config_ids"] = ["cfg-0", "cfg-1"]
+        result = self.call_gate(manifest=manifest)
+        self.assertEqual(result["state"], "inconclusive")
+        self.assertIn("runtime config results do not cover the exact declared config set", result["reasons"])
+
+    def test_grid_must_fit_live_device_limits(self):
+        manifest = evidence()
+        manifest["target_preflight"]["launch_checks"][0]["grid"] = [65536, 1, 1]
+        result = self.call_gate(manifest=manifest)
+        self.assertEqual(result["state"], "rejected")
+        self.assertIn("required launch grid exceeds the live device limit: case-001/cfg-0", result["reasons"])
+
+    def test_grid_limits_without_live_query_remain_inconclusive(self):
+        manifest = evidence()
+        manifest["target_preflight"]["device_limits"]["source"] = "copied-from-old-log"
+        result = self.call_gate(manifest=manifest)
+        self.assertEqual(result["state"], "inconclusive")
+        self.assertIn("device grid limits must come from a live target query", result["reasons"])
+
+    def test_launch_bounds_must_cover_case_by_config_cross_product(self):
+        manifest = evidence()
+        manifest["target_preflight"]["required_config_ids"] = ["cfg-0", "cfg-1"]
+        manifest["target_preflight"]["config_results"].append({
+            "config_id": "cfg-1",
+            "compile_status": "passed",
+            "entrypoint_status": "passed",
+        })
+        result = self.call_gate(manifest=manifest)
+        self.assertEqual(result["state"], "inconclusive")
+        self.assertIn("launch checks do not cover the exact correctness-case/config matrix", result["reasons"])
+
+    def test_runtime_preflight_must_match_correctness_case_set(self):
+        manifest = evidence()
+        manifest["target_preflight"]["case_set_id"] = "other-suite"
+        result = self.call_gate(manifest=manifest)
+        self.assertEqual(result["state"], "inconclusive")
+        self.assertIn("runtime preflight case set differs from correctness contract", result["reasons"])
+
+    def test_correctness_results_must_cover_declared_suite_exactly(self):
+        manifest = evidence()
+        manifest["correctness"]["case_contract"]["required_case_ids"] = ["case-001", "case-002"]
+        result = self.call_gate(manifest=manifest)
+        self.assertEqual(result["state"], "inconclusive")
+        self.assertIn("correctness results do not cover the exact declared case set", result["reasons"])
 
     def test_failed_target_case_is_rejected(self):
         manifest = evidence()

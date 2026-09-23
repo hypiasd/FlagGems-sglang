@@ -1,14 +1,18 @@
 # Independent reviewer protocol
 
-This is a reusable source-review protocol for generated or optimized kernels.
-Task/framework adapters supply the target IDs, contract, baseline, visible test
-set, and static report; they must not weaken the two-stage independence rules.
+This is a reusable, supplementary source-review protocol for generated or
+optimized kernels. Task/framework adapters supply the target IDs, contract,
+baseline, workload signatures, capability profile, visible tests, and static
+report; they must not weaken the two-stage independence rules. The reviewers
+help find source-level defects and explain evidence gaps; they do not replace
+the executable target preflight in `reliability-gates.md`.
 
 ## Stage A: blind audit
 
 Use a real read-only sub-agent in a fresh context. Provide exact candidate and
-baseline bytes/hashes, operator contract, visible tests, target/compiler
-profile, and relevant prior external failures. Do not provide current
+baseline bytes/hashes, operator contract, visible tests/workload signatures,
+live target/compiler capability profile, and relevant prior external failures.
+Do not provide current
 deterministic-scan findings or scanner source. Do not ask the reviewer to find
 a fixed number of "novel" bugs: that rewards speculation. Ask for a concrete
 audit of dataflow, shapes/ranks, masks, pointers/strides, casts, launch mapping,
@@ -59,8 +63,10 @@ Python gate proved sub-agent independence.
 An empty finding list is not evidence that a reviewer can detect unknown bugs.
 Measure that capability separately with blinded holdout trials: use known
 historical failures, remove their diagnosis/logs from reviewer inputs, then
-compare the blind report to the independently curated failure facts. Report
-per-trial detection, false alarms, and misses. Static-rule regression tests
-prove only that the rules still catch their encoded patterns; they do not
+compare the blind report to the independently curated failure facts. Include
+mechanism-level variants with different names, shapes, and source structure.
+Report per-trial detection, false alarms, and misses. Static-rule regression
+tests prove only that the rules still catch their encoded patterns; they do not
 evaluate the reviewer. Do not tune a prompt on a holdout and then reuse that
-same case as an unbiased success metric.
+same case as an unbiased success metric. Even strong holdout performance does
+not let AI review clear missing target execution evidence.

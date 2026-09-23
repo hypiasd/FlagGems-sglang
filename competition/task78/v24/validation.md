@@ -32,10 +32,12 @@ compiler, target-device test, or performance benchmark.
 | concat_and_cast_mha_k_metax.py | 8641369bae965911cfdceec1122df4a7c1e0bb58afaa45beca75dcd4bd0afad9 |
 
 The recorded v24 result predates workflow v4 and used the former one-receipt
-review protocol. Its archived `local-gate.json` and review artifacts remain the
-historical record; they do not satisfy the current two-agent gate. Re-running
-v24 through today's gate requires fresh blind and reconciliation agents bound
-to the current baseline/source hashes. The Arc outcome below is unchanged.
+review protocol. It also predates the v5 mandatory target preflight. Its
+archived `local-gate.json` and review artifacts remain the historical record;
+they do not satisfy the current review or target-evidence gate. Re-running v24
+through today's gate requires fresh blind and reconciliation agents, plus a
+trusted target run bound to current source/baseline hashes. The Arc outcome
+below is unchanged.
 
 Reproduce the non-review portions from the project root:
 

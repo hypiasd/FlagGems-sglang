@@ -7,7 +7,7 @@ strides/layouts, and scalar parameters needed to identify the case.
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "run_id": "operator-run-target-attempt",
   "target": {
     "backend": "backend-name",
@@ -27,10 +27,48 @@ strides/layouts, and scalar parameters needed to identify the case.
     "success": true,
     "log_ref": "local-log-or-service-job-reference"
   },
+  "target_preflight": {
+    "case_set_id": "complete-official-plus-generated-correctness-cases-v1",
+    "api_checks": {
+      "public_entrypoint": "passed",
+      "launch_binding": "passed",
+      "backend_config_api": "passed"
+    },
+    "required_config_ids": ["cfg-0"],
+    "config_results": [
+      {
+        "config_id": "cfg-0",
+        "compile_status": "passed",
+        "entrypoint_status": "passed"
+      }
+    ],
+    "device_limits": {
+      "grid_max": [65535, 65535, 65535],
+      "source": "live-device-query"
+    },
+    "launch_checks": [
+      {
+        "case_id": "tail-case",
+        "config_id": "cfg-0",
+        "grid": [1, 1, 1],
+        "status": "passed"
+      },
+      {
+        "case_id": "strided-case",
+        "config_id": "cfg-0",
+        "grid": [1, 1, 1],
+        "status": "passed"
+      }
+    ]
+  },
   "correctness": {
     "suite_id": "suite-name-and-revision",
     "total_cases": 2,
     "passed_cases": 2,
+    "case_contract": {
+      "case_set_id": "complete-official-plus-generated-correctness-cases-v1",
+      "required_case_ids": ["tail-case", "strided-case"]
+    },
     "cases": [
       {
         "case_id": "tail-case",
@@ -67,13 +105,22 @@ strides/layouts, and scalar parameters needed to identify the case.
 The gate verifies that the candidate file is byte-for-byte the returned source,
 both source hashes match, target/compiler identity is present, compilation is
 reported successful, and every enumerated correctness case is reported passed.
-It also links a provenance hash to a separately preserved raw tool result when
-`--raw-target-result` is supplied. A zero-case report is inconclusive; a failed
-case is rejected. These checks establish consistency of the supplied records,
-not that the provider actually ran them: a hand-authored manifest and matching
-hash are still a claim. Preserve the live tool/official platform result and
-record its invocation/job ID; the workflow must not call a self-authored JSON
-manifest an independently verified target run.
+Schema v2 additionally requires exact correctness-case coverage, a per-target
+API/config preflight, compile-and-entrypoint results for every declared config,
+a live device grid-limit query, and launch-bound checks for the full
+case-by-config matrix. Any failed API/config/correctness/launch check rejects
+the target; missing or partial coverage is inconclusive. A launch whose grid
+exceeds a queried axis limit is rejected before benchmark interpretation.
+The target runner must enumerate config IDs from the actual compiled/autotuned
+entrypoint and bind them to the source hash; do not hand-pick a subset. Its
+case-set ID must exactly match the correctness contract.
+
+The gate also links a provenance hash to a separately preserved raw tool result
+when `--raw-target-result` is supplied. These checks establish consistency of
+the supplied records, not that the provider actually ran them: a hand-authored
+manifest and matching hash are still a claim. Preserve the live tool/official
+platform result and record its invocation/job ID; only direct inspection of a
+trusted result can promote the state beyond `reported`.
 
 For measurement, every benchmark case must refer to a correctness-passed case
 with the identical signature. Keep at least five positive raw timings for both
@@ -83,15 +130,18 @@ listed cases. It calculates relative median absolute deviation (MAD) and the
 largest sample's relative deviation from the median. Preserve every sample;
 the robust median is not permission to delete an outlier.
 
-The adapter must declare a versioned `case_contract` with the complete required
-case IDs and score rule. If the measured set differs from that exact list, the
-gate labels the output `performance_reported_subset`; the aggregate is only a
-diagnostic for those listed cases. With complete coverage, it labels the
-normalized result `performance_reported_complete`, not `measured`: the Python
-gate cannot authenticate execution, provider identity, or provenance. The
-calling workflow may promote an evidence state only after directly inspecting
-the raw result from a trusted live runner/official evaluation. `reported_only`
-and subset results never establish a task-level score.
+The adapter must declare separate versioned case contracts for correctness and
+benchmarking. The correctness set includes the official correctness cases and
+generated boundary/property cases; record generator version and seeds in the
+raw result. The benchmark contract contains the complete official score case
+set and score rule. If either set is incomplete, the target stays inconclusive;
+if the measured set differs from the benchmark set, the gate labels the output
+`performance_reported_subset`. With complete coverage, it labels the normalized
+result `performance_reported_complete`, not `measured`: the Python gate cannot
+authenticate execution, provider identity, or provenance. The calling workflow
+may promote an evidence state only after directly inspecting the raw result
+from a trusted live runner/official evaluation. `reported_only` and subset
+results never establish a task-level score.
 
 The computed geometric mean is a diagnostic comparison over the listed cases,
 not the task's official score (`official_score_computed` is always false in this

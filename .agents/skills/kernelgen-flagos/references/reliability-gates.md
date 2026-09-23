@@ -1,4 +1,4 @@
-# KernelGen workflow v4: independent review and evidence provenance
+# KernelGen workflow v5: executable target preflight and evidence provenance
 
 This is the shared workflow for generation, optimization, and platform
 specialization. A repository adapter may add operator-specific constraints,
@@ -19,6 +19,10 @@ target matrices, or scoring rules, but must not weaken these evidence gates.
   and test/benchmark set. Do not transfer a pass from one of those to another.
 - Source review and CPU semantic models find some defects; neither proves
   target compilation, runtime correctness, or performance.
+- A candidate is not ready for a scarce official evaluation until every
+  required target passes an executable target preflight. If no trusted target
+  runner/compiler is callable, the state remains `inconclusive`; source review
+  cannot substitute for missing hardware evidence.
 
 ## Evidence states
 
@@ -54,6 +58,10 @@ Record the public API, reference semantics, output shape/dtype/device/layout,
 supported input layouts and dtypes, empty/tail behavior, mutation rules,
 tolerances, and forbidden fallbacks. Identify the exact baseline source hash,
 test/benchmark revision, target backend/device, and score aggregation rule.
+For each target, capture the official workload signatures and target capability
+profile (compiler/runtime revision, supported launch/config API, and live device
+limits). Unknown fields remain explicit; AI must not infer target limits from
+another chip or from a prior error string.
 Unknown contract fields stay marked unknown; generated code cannot define them.
 
 Read the current tests and benchmark before proposing a change. If the target
@@ -101,9 +109,12 @@ evidence that tests ran.
 ### 5. Run local checks and the two-agent review protocol
 
 Run syntax, repository tests, and a contract-focused semantic harness on the
-isolated candidate. Record counts and exact commands. If only a CPU model is
-available, label it local semantic evidence; do not call it target compilation
-or device validation.
+isolated candidate. Prefer property-based case generation from the operator
+contract: vary shapes around tile/loop boundaries discovered in the candidate,
+generate legal stride/layout combinations, and record seeds and signatures.
+Keep the official case set separate from generated stress cases. Record counts
+and exact commands. If only a CPU model is available, label it local semantic
+evidence; do not call it target compilation or device validation.
 
 For non-trivial or target-sensitive kernels, follow
 [`reviewer-protocol.md`](reviewer-protocol.md). Stage A is a fresh read-only
@@ -121,22 +132,40 @@ An empty review is only “no issue found by this review.” It cannot clear an
 unverified compiler/runtime risk. A credible unresolved risk requires a repair
 or target smoke evidence before the candidate is called ready for that target.
 
-### 6. Validate on the actual target when possible
+### 6. Mandatory executable preflight on every target
 
-Target evidence must be tied to the exact candidate and baseline hashes and
-include the backend/device, compiler/runtime, test-suite identity, input
-signatures (shapes, dtypes, and relevant strides), compile outcome, per-case
-correctness outcome, timing method, warm-up count, raw timing samples, and
-provenance linking to the unmodified raw response/log plus its service job or
-invocation ID. A hand-authored normalized JSON file is a claim, not proof that
-the target ran. Preserve the raw tool/platform result and distinguish
-`reported_only` from evidence observed directly from a live trusted runner or
-official evaluation. The local parser checks internal consistency and hashes;
-it cannot authenticate the provider or the execution.
+For every backend, a trusted live runner must execute a preflight against the
+exact candidate. This is the primary detector for target-only failures; source
+reviewers are not expected to predict undocumented compiler/device behavior.
+The preflight must:
 
-Require at least one executed correctness case; zero cases is `inconclusive`.
-Any failed correctness case rejects that target candidate. A compile-only
-smoke test is useful but does not establish correctness.
+- invoke the real public wrapper and backend launch path, exercising argument
+  binding and the target's actual autotune/config wrapper;
+- construct and compile every declared launch/autotune configuration with the
+  target compiler, not only the configuration that happened to win tuning;
+- query device limits from the live runtime and check every generated launch
+  grid for the official workload and generated boundary cases;
+- compare output against the reference on the target, including every official
+  correctness case and generated stride/tail/dtype cases; do not use an AI
+  judgment in place of numeric comparison;
+- preserve exact source/baseline hashes, target/compiler/runtime, case and
+  config IDs, input signatures, device limits, logs, raw outputs, and runner
+  invocation ID.
+
+These are mechanism-level oracles, not version-specific signatures: real
+entrypoint invocation catches binding/decorator interactions; actual config
+construction/compilation catches backend API and lowering incompatibilities;
+reference comparison catches numerical/coverage errors; live limit queries
+catch invalid grid/resource requests. A failure blocks that candidate/target.
+Missing target execution or incomplete config/case coverage is `inconclusive`,
+not a pass. The structured parser checks consistency only; preserve and inspect
+the raw result from the trusted runner because hashes alone cannot authenticate
+an execution.
+
+Every target correctness run must cover the adapter-declared correctness case
+set exactly; zero, partial, or unbound coverage is `inconclusive`. Any failed
+correctness case rejects that target candidate. A compile-only smoke test is
+useful but does not establish correctness.
 
 For a task-level performance claim, the task adapter must declare a versioned
 required case set and the official score formula. The measured case IDs must
@@ -150,10 +179,11 @@ within observed noise, repeat instead of declaring a win. A single scalar
 speedup without shapes, baseline identity, and measurement context is not
 benchmark evidence.
 
-If target hardware or a trustworthy remote target runner is unavailable,
-leave target state `inconclusive`. A user-controlled competition package may
-still be prepared as an explicitly unvalidated experiment only when the
-repository adapter permits it; it must not replace the best source or be
+If target hardware or a trustworthy remote target runner is unavailable, leave
+target state `inconclusive` and do not label the candidate submission-ready.
+Only if the user explicitly chooses a diagnostic submission may an adapter
+prepare an `unvalidated_experiment`; it must be clearly separated from normal
+optimization submissions, must not replace the best source, and must not be
 described as a performance improvement.
 
 ### 7. Decide, package, and learn from the official result
@@ -175,11 +205,14 @@ score per target and a stability note; retain anomalous raw values and label
 them rather than silently dropping them. Turn only reproduced or directly
 evidenced failures into reusable target constraints.
 
-Evaluate the reviewer workflow with blinded holdout failures. Keep these
-experiments separate from static-rule regression tests: a rule recognizing a
-known bug is not evidence that a sub-agent can find unknown bugs. Report
-detections, misses, and false alarms; do not reuse prompt-tuning cases as
-unbiased holdouts.
+Evaluate source-review capability with blinded holdouts and mechanism-level
+mutations. Keep those results separate from production gates and static-rule
+regressions. Vary names, formatting, thresholds, and shapes so an evaluator
+cannot pass by memorizing a file, line, or error string. Report detection,
+misses, and false alarms. Once a holdout's diagnosis is exposed, retire it from
+unbiased evaluation; do not tune a prompt or scanner on it and continue to
+count it as a blind success. Regardless of reviewer scores, the target
+preflight remains the acceptance oracle for target-only behavior.
 
 ## Normalized target-evidence gate
 

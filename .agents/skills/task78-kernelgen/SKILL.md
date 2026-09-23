@@ -18,7 +18,7 @@ Before doing anything else, read:
 - `competition/task78/README.md`
 - the current baseline source file for the requested platform
 
-Use the shared workflow v4 in
+Use the shared workflow v5 in
 `.agents/skills/kernelgen-flagos/references/reliability-gates.md` and the
 registered KernelGen MCP operation for code generation, optimization, and
 specialization. A config file is not proof that a tool is live. If the tool is
@@ -35,10 +35,16 @@ kernel path, and avoid PyTorch fallback, exception fallback, or device-based
 bypass. Reject launch-constant-only changes when the request is for a new
 version: each evaluated platform needs a structural optimization.
 
-Run the repository CPU validator and syntax checks before considering a
-candidate for promotion. Treat those checks as semantic evidence only; use
-the actual Arc result as the performance evidence. International A and B must
-be reported separately even when they share the generic source file.
+Run the repository CPU validator and syntax checks as local evidence only. A
+candidate is not submission-ready until every backend passes the live target
+preflight in the shared workflow: exact backend API/config invocation, every
+autotune configuration compiled and exercised, device limits queried, complete
+launch bounds checked, and reference-based correctness tests passed. If no
+trusted per-chip runner is callable, keep the target state inconclusive; do not
+spend an official Arc attempt as a substitute unless the user explicitly
+chooses a diagnostic submission. Use the official Arc result as performance
+evidence. International A and B must be reported separately even when they
+share the generic source file.
 
 The deterministic candidate gate is intentionally conservative: it checks portable
 `triton.Config` options, autotune-to-launch parameter binding, masked pointer

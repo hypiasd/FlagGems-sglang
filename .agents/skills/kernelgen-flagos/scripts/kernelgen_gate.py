@@ -3,9 +3,10 @@
 
 This gate does not execute Triton or authenticate a target service. Candidate
 mode checks the response/source envelope. Target mode checks consistency of
-reported compile, correctness, and repeated timings against exact source files,
-and labels those as reports/claims. It never makes a cross-target promotion
-decision or computes an operator's official score.
+reported API/config probes, per-configuration compilation/invocation, live
+device limits, launch bounds, correctness, and repeated timings against exact
+source files, and labels those as reports/claims. It never makes a cross-target
+promotion decision or computes an operator's official score.
 """
 
 from __future__ import annotations
@@ -86,6 +87,123 @@ def _max_relative_deviation(samples: List[float]) -> float:
     return max(abs(x - center) for x in samples) / center
 
 
+def _target_preflight(
+    preflight: Any,
+    correctness_case_ids: set[str],
+    correctness_case_set_id: Optional[str],
+) -> Tuple[str, List[str]]:
+    """Check target API/config coverage and launch bounds from a live probe report."""
+    reasons: List[str] = []
+    if not isinstance(preflight, dict):
+        return "inconclusive", ["missing per-target runtime preflight"]
+    preflight_case_set_id = preflight.get("case_set_id")
+    if not _nonempty_string(preflight_case_set_id):
+        reasons.append("runtime preflight is missing its case-set identity")
+    elif correctness_case_set_id and preflight_case_set_id != correctness_case_set_id:
+        reasons.append("runtime preflight case set differs from correctness contract")
+
+    api_checks = preflight.get("api_checks")
+    required_api_checks = {
+        "public_entrypoint", "launch_binding", "backend_config_api",
+    }
+    if not isinstance(api_checks, dict):
+        reasons.append("runtime preflight is missing API checks")
+    else:
+        for check_id in sorted(required_api_checks):
+            status = api_checks.get(check_id)
+            if check_id == "backend_config_api" and status == "not_applicable":
+                continue
+            if status == "failed":
+                return "rejected", ["target API preflight failed: " + check_id]
+            if status != "passed":
+                reasons.append("runtime API check is missing or incomplete: " + check_id)
+
+    config_ids = preflight.get("required_config_ids")
+    config_results = preflight.get("config_results")
+    valid_config_ids = (
+        isinstance(config_ids, list) and bool(config_ids)
+        and all(_nonempty_string(item) for item in config_ids)
+        and len(set(config_ids)) == len(config_ids)
+    )
+    if not valid_config_ids:
+        reasons.append("runtime preflight must declare unique required config IDs")
+    elif not isinstance(config_results, list):
+        reasons.append("runtime preflight is missing per-config results")
+    else:
+        actual_config_ids = []
+        for result in config_results:
+            if not isinstance(result, dict) or not _nonempty_string(result.get("config_id")):
+                reasons.append("malformed per-config runtime result")
+                continue
+            config_id = result["config_id"]
+            actual_config_ids.append(config_id)
+            statuses = (result.get("compile_status"), result.get("entrypoint_status"))
+            if "failed" in statuses:
+                return "rejected", ["target config compile or wrapper invocation failed: " + config_id]
+            if statuses != ("passed", "passed"):
+                reasons.append("config did not compile and run through the public entrypoint: " + config_id)
+        if len(actual_config_ids) != len(set(actual_config_ids)):
+            reasons.append("duplicate per-config runtime result")
+        if valid_config_ids and set(actual_config_ids) != set(config_ids):
+            reasons.append("runtime config results do not cover the exact declared config set")
+
+    limits = preflight.get("device_limits")
+    grid_max = limits.get("grid_max") if isinstance(limits, dict) else None
+    limits_source = limits.get("source") if isinstance(limits, dict) else None
+    valid_grid_max = (
+        isinstance(grid_max, list) and len(grid_max) == 3
+        and all(isinstance(value, int) and not isinstance(value, bool) and value > 0
+                for value in grid_max)
+    )
+    if not valid_grid_max or limits_source != "live-device-query":
+        reasons.append("device grid limits must come from a live target query")
+
+    launch_results = preflight.get("launch_checks")
+    if not isinstance(launch_results, list):
+        reasons.append("runtime preflight is missing per-case/per-config launch checks")
+    elif valid_config_ids:
+        expected_pairs = {
+            (case_id, config_id)
+            for case_id in correctness_case_ids
+            for config_id in config_ids
+        }
+        actual_pairs = set()
+        for result in launch_results:
+            if not isinstance(result, dict):
+                reasons.append("malformed launch-bound check")
+                continue
+            case_id, config_id = result.get("case_id"), result.get("config_id")
+            grid = result.get("grid")
+            if not _nonempty_string(case_id) or not _nonempty_string(config_id):
+                reasons.append("launch-bound check is missing case_id or config_id")
+                continue
+            pair = (case_id, config_id)
+            if pair in actual_pairs:
+                reasons.append("duplicate launch-bound check: " + case_id + "/" + config_id)
+            actual_pairs.add(pair)
+            if pair not in expected_pairs:
+                reasons.append("launch-bound check is outside the declared case/config matrix")
+            if result.get("status") == "failed":
+                return "rejected", ["target launch check failed: " + case_id + "/" + config_id]
+            if result.get("status") != "passed":
+                reasons.append("launch-bound check is incomplete: " + case_id + "/" + config_id)
+            if (not isinstance(grid, list) or not 1 <= len(grid) <= 3
+                    or any(not isinstance(value, int) or isinstance(value, bool) or value <= 0
+                           for value in grid)):
+                reasons.append("launch check has an invalid grid: " + case_id + "/" + config_id)
+            elif valid_grid_max and any(
+                value > grid_max[axis] for axis, value in enumerate(grid)
+            ):
+                return "rejected", [
+                    "required launch grid exceeds the live device limit: "
+                    + case_id + "/" + config_id
+                ]
+        if actual_pairs != expected_pairs:
+            reasons.append("launch checks do not cover the exact correctness-case/config matrix")
+
+    return ("inconclusive", reasons) if reasons else ("passed", [])
+
+
 def _target_gate(
     data: Dict[str, Any],
     code: str,
@@ -106,7 +224,7 @@ def _target_gate(
         }
 
     schema_version = evidence.get("schema_version")
-    if not isinstance(schema_version, int) or isinstance(schema_version, bool) or schema_version != 1:
+    if not isinstance(schema_version, int) or isinstance(schema_version, bool) or schema_version != 2:
         reasons.append("missing or unsupported target-evidence schema_version")
     if not _nonempty_string(evidence.get("run_id")):
         reasons.append("missing target-evidence run_id")
@@ -228,6 +346,38 @@ def _target_gate(
                     "performance_state": "unknown",
                     "reasons": ["target case failed or has unknown status: " + case_id],
                 }
+
+    correctness_contract = correctness.get("case_contract")
+    correctness_case_set_id = None
+    if not isinstance(correctness_contract, dict):
+        reasons.append("correctness suite is missing its required case contract")
+    else:
+        required_correctness_ids = correctness_contract.get("required_case_ids")
+        if not (
+            isinstance(required_correctness_ids, list)
+            and bool(required_correctness_ids)
+            and all(_nonempty_string(case_id) for case_id in required_correctness_ids)
+            and len(set(required_correctness_ids)) == len(required_correctness_ids)
+            and _nonempty_string(correctness_contract.get("case_set_id"))
+        ):
+            reasons.append("correctness case contract is incomplete")
+        elif set(required_correctness_ids) != case_ids:
+            reasons.append("correctness results do not cover the exact declared case set")
+        else:
+            correctness_case_set_id = correctness_contract["case_set_id"]
+
+    preflight_state, preflight_reasons = _target_preflight(
+        evidence.get("target_preflight"), case_ids, correctness_case_set_id
+    )
+    if preflight_state == "rejected":
+        return {
+            "state": "rejected",
+            "correctness_state": "failed",
+            "performance_state": "unknown",
+            "target": target,
+            "reasons": preflight_reasons,
+        }
+    reasons.extend(preflight_reasons)
 
     if reasons:
         return {
