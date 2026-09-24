@@ -69,6 +69,18 @@ class SubmissionHurdleTests(unittest.TestCase):
         self.assertFalse(report["passed"])
         self.assertTrue(any("finite numbers" in error for error in report["errors"]))
 
+    def test_unfilled_template_forecast_returns_actionable_errors(self):
+        forecast = self.forecast(10, 0)
+        forecast["ascend"]["expected_delta_pct"] = None
+        forecast["ascend"]["lower_delta_pct"] = None
+        report = hurdle.evaluate({"performance_forecast": forecast}, self.rows, results.ROOT)
+        self.assertFalse(report["passed"])
+        self.assertTrue(any("ascend: expected_delta_pct must be a finite number" == error
+                            for error in report["errors"]))
+        self.assertTrue(any("ascend: lower_delta_pct must be a finite number" == error
+                            for error in report["errors"]))
+        self.assertIn("baseline_scores", report)
+
 
 if __name__ == "__main__":
     unittest.main()

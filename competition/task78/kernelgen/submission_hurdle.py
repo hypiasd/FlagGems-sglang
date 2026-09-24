@@ -56,12 +56,19 @@ def evaluate(manifest: dict, rows: list[dict], archive_root: Path) -> dict:
         for field in ("expected_delta_pct", "lower_delta_pct", "confidence", "evidence_basis", "evidence"):
             if field not in item:
                 errors.append(f"{target}: missing {field}")
-        if not isinstance(item.get("expected_delta_pct"), (int, float)):
+        expected_value = item.get("expected_delta_pct")
+        lower_value = item.get("lower_delta_pct")
+        invalid_delta = False
+        if isinstance(expected_value, bool) or not isinstance(expected_value, (int, float)):
+            errors.append(f"{target}: expected_delta_pct must be a finite number")
+            invalid_delta = True
+        if isinstance(lower_value, bool) or not isinstance(lower_value, (int, float)):
+            errors.append(f"{target}: lower_delta_pct must be a finite number")
+            invalid_delta = True
+        if invalid_delta:
             continue
-        if not isinstance(item.get("lower_delta_pct"), (int, float)):
-            continue
-        expected_delta[target] = float(item["expected_delta_pct"])
-        lower_delta[target] = float(item["lower_delta_pct"])
+        expected_delta[target] = float(expected_value)
+        lower_delta[target] = float(lower_value)
         if not math.isfinite(expected_delta[target]) or not math.isfinite(lower_delta[target]):
             errors.append(f"{target}: forecast deltas must be finite numbers")
             continue
