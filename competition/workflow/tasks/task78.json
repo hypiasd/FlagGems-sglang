@@ -1,0 +1,70 @@
+{
+  "schema_version": 1,
+  "competition": "flagos-s2",
+  "task_id": "task78",
+  "task_name": "concat_and_cast_mha_k",
+  "operator": "concat_and_cast_mha_k",
+  "public_entrypoint": "concat_and_cast_mha_k(k, k_nope, k_rope)",
+  "source_files": [
+    "competition/task78/concat_and_cast_mha_k.py",
+    "competition/task78/concat_and_cast_mha_k_ascend.py",
+    "competition/task78/concat_and_cast_mha_k_enflame.py",
+    "competition/task78/concat_and_cast_mha_k_hygon.py",
+    "competition/task78/concat_and_cast_mha_k_iluvatar.py",
+    "competition/task78/concat_and_cast_mha_k_kunlunxin.py",
+    "competition/task78/concat_and_cast_mha_k_metax.py"
+  ],
+  "targets": ["iluvatar", "metax", "enflame", "hygon", "kunlunxin", "ascend", "intl_a", "intl_b"],
+  "target_labels": {"iluvatar":"天数智芯","metax":"沐曦","enflame":"燧原","hygon":"海光","kunlunxin":"昆仑芯","ascend":"华为","intl_a":"国际通用 A","intl_b":"国际通用 B"},
+  "baseline": {
+    "selection": "task78-results-ledger-per-target-champion",
+    "ledger": "competition/task78/results.jsonl",
+    "selector": "competition/task78/kernelgen/prepare_mixed_candidate.py",
+    "candidate_snapshot": "use immutable baseline/ and source/ directories; shared default source has separate intl_a and intl_b rows"
+  },
+  "result_ledger": {
+    "path": "competition/task78/results.jsonl",
+    "format": "task78-v1",
+    "report": "competition/task78/results.md",
+    "validator": "competition/task78/kernelgen/task78_results.py"
+  },
+  "local_gate": {
+    "command": "python3 competition/task78/validate_cpu.py --source-dir <candidate-source> --all --autotune-sweep",
+    "evidence_class": "cpu-semantic-only",
+    "contract": "exact cat-then-cast semantics, layout, dtype, strides, tails, empty segments, and input immutability"
+  },
+  "review_policy": {
+    "independent_reviews": 2,
+    "distinct_invocation_ids": true,
+    "static_scan_after_blind_review": true,
+    "structural_delta_required": true
+  },
+  "score_policy": {
+    "aggregate_source": "official-platform",
+    "aggregate_required_for_promotion": true,
+    "aggregate_valid_only_when_all_targets_pass": true,
+    "goal_resolution": "existing Task 78 submission_hurdle.py using ledger champions and the 1.50x floor",
+    "release_floor": "max(1.50x, 1.05x champion composite); conservative aggregate does not regress; no target lower bound below -5%",
+    "anomaly_rule": "keep every observation; exclude only directly confirmed invalid measurements"
+  },
+  "package": {
+    "format": "zip",
+    "root_members": [
+      "concat_and_cast_mha_k.py",
+      "concat_and_cast_mha_k_ascend.py",
+      "concat_and_cast_mha_k_enflame.py",
+      "concat_and_cast_mha_k_hygon.py",
+      "concat_and_cast_mha_k_iluvatar.py",
+      "concat_and_cast_mha_k_kunlunxin.py",
+      "concat_and_cast_mha_k_metax.py"
+    ],
+    "source_sha256_required": true
+  },
+  "submission": {
+    "browser": "chrome",
+    "batch_resolution": "chrome-before-each-upload",
+    "preflight_fields": ["task_id", "batch_id", "team_ref", "visible_quota_remaining", "latest_record", "duplicate_archive_check"],
+    "rate_limit_seconds_strictly_greater_than": 120,
+    "platform_record_is_target_validation": true
+  }
+}

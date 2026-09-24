@@ -1,8 +1,8 @@
 # v24 validation record
 
-This record separates local evidence from the subsequent official Arc result.
+This record separates local evidence from the subsequent official FlagOS result.
 The local gates below do not imply target compilation, correctness, or
-performance; Arc evaluated the packaged source on 2026-09-20.
+performance; FlagOS evaluated the packaged source on 2026-09-20.
 
 ## Gate results
 
@@ -36,7 +36,7 @@ review protocol. It also predates the v5 mandatory target preflight. Its
 archived `local-gate.json` and review artifacts remain the historical record;
 they do not satisfy the current review or target-evidence gate. Re-running v24
 through today's gate requires fresh blind and reconciliation agents, plus a
-trusted target run bound to current source/baseline hashes. The Arc outcome
+trusted target run bound to current source/baseline hashes. The FlagOS outcome
 below is unchanged.
 
 Reproduce the non-review portions from the project root:
@@ -74,13 +74,13 @@ unzip -t competition/task78/flagos-task78-v24.zip
    the shipped one as `subagent-review-first-round.json`, and the rejected gate
    run as `local-gate-first-round.json`, in the candidate directory.
 
-## Review notes before Arc
+## Review notes before submission
 
 None of these was judged a blocker by the second review; they are recorded so
-an Arc failure can be triaged quickly.
+a FlagOS failure can be triaged quickly.
 
 - **Ascend `num_warps=8`** (line 82) is the first non-4 `num_warps` on an
-  Arc-tested Ascend launch (v19–v23 all used 4). If Ascend reports a launch or
+  FlagOS-tested Ascend launch (v19–v23 all used 4). If Ascend reports a launch or
   UB rejection, reverting to 4 is the direct counterfactual. A loud failure, not
   a silent numeric one.
 - **`num_stages=2`** on the generic, Enflame, Iluvatar and Kunlunxin files, where
@@ -92,11 +92,11 @@ an Arc failure can be triaged quickly.
 - **Ascend loop-variable rebinding.** The grid-stride induction variable is
   rebound (`block = block.to(tl.int64)`) rather than copied to a new name as in
   v19; the branch is constexpr-pruned unless `WIDE` is true, so it cannot reach
-  an Arc shape.
+  an official Ascend test shape.
 
-## Arc result (2026-09-20 21:31)
+## Official FlagOS result (2026-09-20 21:31)
 
-The package completed with 7/8 targets. Arc reported no aggregate speedup,
+The package completed with 7/8 targets. FlagOS reported no aggregate speedup,
 because Enflame failed. The per-target results were:
 
 | Target | Result |

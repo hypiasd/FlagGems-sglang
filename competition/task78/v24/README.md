@@ -1,9 +1,9 @@
 # Task 78 v24 — coverage-repaired per-backend candidate, locally gated
 
-Status: locally gated (Stages 3–5) and packaged; **not yet submitted to Arc**.
+Status: locally gated (Stages 3–5) and packaged; **not yet submitted to FlagOS**.
 The package is [`../flagos-task78-v24.zip`](../flagos-task78-v24.zip), holding
 exactly the seven `concat_and_cast_mha_k*.py` files at ZIP root. The root
-submission files in `competition/task78/` remain the Arc-proven **v19** set
+submission files in `competition/task78/` remain the **v19** set with an official 8/8 result
 (8/8, avg 1.25x) until a new candidate is accepted; the ZIP is the artifact to
 upload.
 
@@ -36,4 +36,4 @@ Stage 5 adversarial read-only review ran twice: the first receipt returned
 this package was built.
 
 See [validation.md](validation.md) for hashes, the full gate table, the repair
-log and the residual risks left for Arc.
+log and the residual risks left for target-backend validation.

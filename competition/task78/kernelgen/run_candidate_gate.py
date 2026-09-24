@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run deterministic pre-Arc gates for a Task 78 candidate directory.
+"""Run deterministic pre-submission gates for a Task 78 candidate directory.
 
 This gate is intentionally local-only. A PASS means the candidate satisfies
 the source contract, the CPU semantic model, and the deterministic compiler-

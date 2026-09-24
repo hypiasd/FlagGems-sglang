@@ -2,6 +2,10 @@
 
 这是 FlagOS S2 赛道一 Task 60 的提交源文件。
 
+全任务候选、检查点、Chrome 提交与官方结果回填统一走
+[`competition/WORKFLOW.md`](../WORKFLOW.md)；Task 60 的算子适配器见
+[`competition/task60/kernelgen/README.md`](kernelgen/README.md)。
+
 `clamp_position.py` 只导出一个公开入口 `clamp_position`，在函数内部按设备类型选择路径：
 
 - `gcu`：燧原 int32 Triton 路径；

@@ -10,7 +10,7 @@ compiler/device capability profile, and the service could not be invoked here.
 
 Reviewers received the candidate and matching root baseline source, contract,
 and backend names. Stage A did not receive scanner output, scanner source, or
-historical Arc diagnostics. Stage B received only the corresponding Stage A
+historical FlagOS-result diagnostics. Stage B received only the corresponding Stage A
 result and static report. The v23/v24 source bundles were isolated under
 `/tmp` so reviewers could not read repository history. No reviewer ran code or
 benchmark. The prompts did not include the official workload shape matrix or a
@@ -36,8 +36,8 @@ the [Task 78 result ledger](../README.md).
 | --- | --- | --- | --- |
 | v21 Stage A | `01a0cf17-272d-7c11-814d-f12cefaf4061` | MetaX grid launches `2*(A+B)` jobs although parity mapping needs only `A` prefix and `B` suffix jobs; surplus programs do masked no-op work. | A plausible performance hypothesis, not a confirmed defect or score change; v21 was not submitted. |
 | v22 Stage A | `01a0cf17-27a0-7f51-a228-67dfaaf0c497` | Flagged Enflame `num_warps=12` as a target-compiler risk; found no source-level Hygon defect. | Detected the Enflame failure class; missed the actual Hygon lowering failure. |
-| v22 Stage B | `01a0cf1d-2c61-7620-b460-67281dec93ce` | Kept Enflame 12-warps as unverified; considered Hygon's rank-1 cast then broadcast shape-valid. Added speculative Enflame static-loop expansion and grid-axis-limit risks. | Did not identify the Hygon Arc failure. The two extra risks have no target confirmation and must not be counted as defects. |
-| v23 Stage A | `01a0cf28-f8e2-79a1-86f0-b2f48eb6f794` | Found Iluvatar's conditional `BC=256` coverage hole when host loop counts are derived using 512; noted Ascend config support as unknown. | A separate source-level hazard, not one of the three Arc-reported failures. It did not identify the Enflame duplicate-`BR` runtime error or Kunlunxin numeric mismatch; Ascend `multibuffer` stayed unknown. |
+| v22 Stage B | `01a0cf1d-2c61-7620-b460-67281dec93ce` | Kept Enflame 12-warps as unverified; considered Hygon's rank-1 cast then broadcast shape-valid. Added speculative Enflame static-loop expansion and grid-axis-limit risks. | Did not identify the Hygon failure in the FlagOS v22 record. The two extra risks have no target confirmation and must not be counted as defects. |
+| v23 Stage A | `01a0cf28-f8e2-79a1-86f0-b2f48eb6f794` | Found Iluvatar's conditional `BC=256` coverage hole when host loop counts are derived using 512; noted Ascend config support as unknown. | A separate source-level hazard, not one of the three failures reported by FlagOS. It did not identify the Enflame duplicate-`BR` runtime error or Kunlunxin numeric mismatch; Ascend `multibuffer` stayed unknown. |
 | v23 Stage B | `01a0cf2e-ae3c-7082-aed5-50753129578a` | Confirmed the Iluvatar hole; found Enflame's uncapped head-grid axis against a limit stated in a source comment; treated explicit `BR`/`NRC` as a non-issue because visible autotune configs varied only `HS`. | The static heuristic flag did not explain the actual Enflame duplicate-`BR` failure. Kunlunxin mismatch remained unresolved/not found. The comment-based grid limit is not a substitute for querying the target. |
 | v24 Stage A | `01a0cf28-f964-7080-8063-01f9ce26e132` | Found no source-provable defect; noted `T*H` launch-grid limits as unverified. | Did not conclude that the actual Enflame grid exceeded the device cap; workload maxima and live limits were absent. |
 | v24 Stage B | `01a0cf2e-adbf-7590-945a-fa8636358ed2` | Found conditional 32-bit overflow risk in wide inner-stride offsets for default, Hygon, Iluvatar, and MetaX. | Additional source-level risk under very large strides, not the official v24 launch failure and not device-tested. |
@@ -54,7 +54,7 @@ Hygon backend and is not reported as a complete run.
 
 ## Interpretation and workflow change
 
-- For v22, Stage A detected one of the two known Arc failure classes (Enflame)
+- For v22, Stage A detected one of the two known FlagOS failure classes (Enflame)
   and missed the other (Hygon). The corrected Stage B also missed Hygon. AI
   review therefore did **not** prevent this known failure.
 - The static regression scanner independently recognizes both v22 failure
@@ -67,7 +67,7 @@ Hygon backend and is not reported as a complete run.
   hypotheses, not automatic blockers or confirmed bugs.
 - On v23, the static scanner's explicit-constexpr heuristic flagged `BR`, but
   the independent reconciler judged it non-issue from visible config keys; the
-  Arc duplicate-argument error remained unexplained. This is a concrete
+  FlagOS-reported duplicate-argument error remained unexplained. This is a concrete
   example that adding or matching a source pattern is not root-cause proof.
 - On v24, both reviewers could only state that launch limits were unknown. A
   live query plus actual workload signatures is required to calculate whether

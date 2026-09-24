@@ -52,9 +52,9 @@ Record one state per candidate and target. States are not interchangeable:
 | `performance_reported_complete` | The manifest has repeated timings for the adapter-declared case set; a script checked consistency, but the raw run is not authenticated and no official score is inferred. |
 | `partial_measurement` | Timings exist for only a subset/diagnostic case set; this is not a task-level speedup. |
 | `reported_only` | A normalized JSON claim lacks a preserved raw result or invocation/job reference. |
-| `arc_candidate` | Local/review gates passed and a package was prepared for a user-controlled competition run; any missing target evidence is explicit. |
-| `arc_submitted` | The user submitted the identified package; the official evaluation is pending. |
-| `arc_completed` | The official result, including failures and per-target scores, was recorded. |
+| `submission_candidate` | Local/review gates passed and the exact package is ready; missing target evidence is explicit. |
+| `submitted` | The identified package was uploaded once and its official record is pending/confirmed. |
+| `officially_evaluated` | The terminal platform record, including per-target failures and scores, was captured. |
 | `rejected` | A concrete contract, source, correctness, compilation, or performance gate failed. |
 | `inconclusive` | Required evidence is absent, ambiguous, mismatched, or too noisy. |
 
@@ -192,11 +192,12 @@ speedup without shapes, baseline identity, and measurement context is not
 benchmark evidence.
 
 If target hardware or a trustworthy remote target runner is unavailable, leave
-target state `inconclusive` and do not label the candidate submission-ready.
-Only if the user explicitly chooses a diagnostic submission may an adapter
-prepare an `unvalidated_experiment`; it must be clearly separated from normal
-optimization submissions, must not replace the best source, and must not be
-described as a performance improvement.
+target state `inconclusive`. An explicit runtime-scoped user authorization may
+allow official competition evaluation to serve as the target oracle; then a
+fully gated package can be prepared as an `unvalidated_experiment`, but remains
+unvalidated until its terminal per-target results arrive. Do not treat the
+upload itself as correctness/performance evidence or replace the best source
+before that result.
 
 ### 7. Decide, package, and learn from the official result
 
@@ -206,9 +207,10 @@ required target correctness and measured score for the operator's actual
 targets; preparation alone does not.
 
 Do not consume scarce evaluation attempts for a cosmetic or unmotivated
-candidate. Before packaging, show the expected benefit, structural diff,
+candidate. Before packaging, record the expected benefit, structural diff,
 coverage by target, evidence gaps, and the exact artifact hash. Do not submit
-externally unless the user has explicitly asked for that action.
+externally unless the user has explicitly authorized that action within the
+current task/account scope.
 
 For every target, write the expected and conservative score delta before
 implementation, explain the mechanism that can deliver it, and name evidence

@@ -11,7 +11,7 @@ comparison, or timeout. The suspected causes below are not diagnoses.
 
 ## Observed v19 result
 
-Arc completed v19 at 09-18 22:57 with Iluvatar `2.36x`, MetaX `1.45x`,
+The official FlagOS record completed v19 at 09-18 22:57 with Iluvatar `2.36x`, MetaX `1.45x`,
 Enflame `0.25x`, Hygon `2.45x`, Kunlunxin `0.27x`, Ascend `0.14x`,
 International A `1.60x`, and International B `1.51x`. All 8/8 chips passed;
 the aggregate was `1.25x`. Compared with v18, Iluvatar, MetaX, Hygon,

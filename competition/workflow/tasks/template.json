@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "competition": "flagos-s2",
+  "task_id": "taskNN",
+  "task_name": "FILL_FROM_FLAGOS_TASK_DETAILS",
+  "operator": "FILL",
+  "public_entrypoint": "FILL_EXACT_SIGNATURE",
+  "source_files": ["competition/taskNN/FILL.py"],
+  "targets": ["FILL_EXACT_PLATFORM_TARGET_IDS"],
+  "baseline": {
+    "selection": "best-valid-official-per-target",
+    "ledger": "competition/taskNN/results.jsonl",
+    "candidate_snapshot": "FILL_IMMUTABLE_SOURCE_SELECTION_RULE"
+  },
+  "result_ledger": {
+    "path": "competition/taskNN/results.jsonl",
+    "format": "generic-v1",
+    "report": "competition/taskNN/results.md"
+  },
+  "local_gate": {
+    "command": "FILL_TASK_SPECIFIC_CONTRACT_VALIDATOR",
+    "evidence_class": "cpu-semantic-only",
+    "contract": "FILL_REFERENCE_SEMANTICS_AND_SUPPORTED_CASES"
+  },
+  "review_policy": {
+    "independent_reviews": 2,
+    "distinct_invocation_ids": true,
+    "static_scan_after_blind_review": true,
+    "structural_delta_required": true
+  },
+  "score_policy": {
+    "aggregate_source": "official-platform",
+    "aggregate_required_for_promotion": true,
+    "aggregate_valid_only_when_all_targets_pass": true,
+    "goal_resolution": "FILL_FROZEN_TASK_GOAL_FROM_FLAGOS_CHROME",
+    "release_floor": "FILL_EVIDENCE_BASED_HURDLE",
+    "anomaly_rule": "keep every observation; exclude only directly confirmed invalid measurements"
+  },
+  "package": {
+    "format": "zip",
+    "root_members": ["FILL_EXACT_SUBMISSION_MEMBERS"],
+    "source_sha256_required": true
+  },
+  "submission": {
+    "browser": "chrome",
+    "batch_resolution": "chrome-before-each-upload",
+    "preflight_fields": ["task_id", "batch_id", "team_ref", "visible_quota_remaining", "latest_record", "duplicate_archive_check"],
+    "rate_limit_seconds_strictly_greater_than": 120,
+    "platform_record_is_target_validation": true
+  }
+}

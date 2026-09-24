@@ -132,7 +132,7 @@ def _config_option_findings(tree: ast.AST) -> list[dict]:
 
     The CPU model intentionally accepts arbitrary config options because it is
     not a target compiler.  That made ``multibuffer=True`` invisible until the
-    Ascend Arc compile.  Unknown options are therefore a hard gate: they need
+    Ascend backend compile.  Unknown options are therefore a hard gate: they need
     a target-version proof before a scarce submission, not a best-effort guess.
     """
     allowed = {"num_warps", "num_stages"}
@@ -416,7 +416,7 @@ def _is_load_cast(node: ast.AST) -> bool:
 
 
 def _hygon_shape_findings(tree: ast.AST, backend: str) -> list[dict]:
-    """Catch the Hygon lowering pattern that failed in the v22 Arc run."""
+    """Catch the Hygon lowering pattern that failed in the v22 FlagOS run."""
     if backend != "hygon":
         return []
     findings: list[dict] = []

@@ -20,7 +20,7 @@ These are retained as observations, not discarded as “bad runs”; a flagged
 champion remains provisional until repeated official evaluation resolves the
 variance.
 
-For a new candidate, follow the [Task 78 KernelGen end-to-end workflow](./kernelgen/README.md#end-to-end-workflow-and-run-states). It defines the run states, per-chip baseline snapshot, forecast gate, reviewer order, target preflight, package identity, one-upload submission lifecycle, and append-only result update.
+For a new candidate, follow the shared [FlagOS S2 workflow](../WORKFLOW.md) and the [Task 78 adapter](./kernelgen/README.md). They define the run states, per-chip baseline snapshot, forecast gate, reviewer order, target evidence, Chrome upload lifecycle, and append-only result update.
 
 v24 targeted the sub-1× chips from v19. It recovered two previously failing
 targets, but Enflame failed because its launch grid exceeded the reported
@@ -55,7 +55,7 @@ device result supersedes the unmeasured wording above.
 
 Run `python3 competition/task78/validate_cpu.py --all` from the repository
 root for direct-source CPU semantic checks. To validate an isolated candidate,
-pass `--source-dir`; the reusable pre-Arc gate is
+pass `--source-dir`; the reusable local candidate gate is
 `python3 competition/task78/kernelgen/run_candidate_gate.py <candidate-dir>`.
 These checks do not compile Triton or prove device performance. The local [validation record](v19/validation.md)
 contains the tested source hashes and results.
@@ -70,10 +70,11 @@ promotion as separate decisions; append every official result and all eight
 target statuses to `results.jsonl`.
 
 Historical version directories and ZIPs remain reproducible references.
-The user uploads candidates to FlagOS for real eight-chip evaluation.
+FlagOS official evaluation is submitted through Chrome under the current S2
+session scope.
 
 v22 originally passed the older local semantic gate and was submitted, but the
-Arc result was 6/8: Enflame failed on `num_warps=12`, Hygon failed in the
+FlagOS result was 6/8: Enflame failed on `num_warps=12`, Hygon failed in the
 suffix cast/broadcast lowering, and the six surviving chip scores were
 1.64/1.07/0.29/0.25/1.39/1.36x. The stricter compiler-risk regression gate
 now rejects v22 before packaging and records both failure patterns. Do not

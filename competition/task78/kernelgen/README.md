@@ -1,10 +1,10 @@
 # Task 78 KernelGen adapter
 
-The reusable KernelGen workflow v6 is defined in
-`.agents/skills/kernelgen-flagos/references/reliability-gates.md`. This file
-adds only Task 78's operator contract, backend matrix, submission policy, and
-observed target constraints. The general workflow's evidence requirements
-remain authoritative.
+The task-neutral FlagOS S2 workflow is defined in
+[`competition/WORKFLOW.md`](../../WORKFLOW.md), with a machine-readable
+adapter at [`competition/workflow/tasks/task78.json`](../../workflow/tasks/task78.json).
+This file adds Task 78's operator contract, backend matrix, release hurdle, and
+observed target constraints.
 
 The first reviewer capability holdout results—including the v22 Hygon miss—are
 recorded in [`reviewer-holdout-experiments.md`](reviewer-holdout-experiments.md).
@@ -21,8 +21,9 @@ Treat one candidate run as an immutable record. Repairs get a new run ID and poi
 | `locally_validated` | Syntax, contract, CPU semantic checks, independent source reviews, and deterministic candidate gate pass. | Run the trusted preflight for every target. |
 | `target_validated` | Exact candidate compiled and passed the full declared correctness/configuration matrix on that target. | Measure the complete target workload using the same method as the baseline. |
 | `measured` | Repeated raw timings for the full required case set, exact source hashes, and score calculation. | Apply the release hurdle; package only if it passes. |
-| `arc_candidate` | Exact package hash, all required gates, and a recorded decision to prepare official evaluation. | Verify Task 78 Batch 6, team, quota, and duplicate history before one upload. |
-| `arc_submitted` / `arc_completed` | Confirmed official record, then its terminal per-target results. | Append the result and recalculate per-chip champions. |
+| `package_ready` | Exact package hash, release forecast, local contract, and independent reviews pass. | Refresh task, batch, team, visible quota, and duplicate history in Chrome. |
+| `upload_armed` / `submitted` / `record_confirmed` / `evaluating` | One-shot upload checkpoint and matching official FlagOS record. | Resume by inspecting/polling the same record; never blindly upload again. |
+| `completed` | Terminal official record and per-target outcomes saved. | Append with `competition/flagos_s2_workflow.py record-result task78 <run-id>`. |
 | `rejected` / `inconclusive` | A named gate failed, or its required evidence is missing or mismatched. | Preserve the run; repair under a new run ID or stop. |
 
 A source review, CPU model, HTTP probe, config file, compile-only check, or partial benchmark cannot move a target to `target_validated` or `measured`. The run is ready only when every required target has the evidence needed for that next state.
@@ -60,9 +61,9 @@ The forecast must clear the larger of `1.50x` and 5% above the current champion 
 
 After generation, bind each backend hypothesis to the actual `source/` and `baseline/` SHA-256 values. Run local checks, Stage A review, deterministic scan, Stage B review, and `run_candidate_gate.py` in that order. Any source change starts a new review and gate cycle under a new attempt ID.
 
-A trusted target runner must compile and execute the exact wrapper, every declared autotune configuration, every official and required boundary correctness case, live device-limit checks, and the full benchmark set. If no such runner is callable, record `inconclusive`; a diagnostic Arc upload is a separate experiment and requires an explicit user choice. Do not package or describe it as a normal performance release.
+A trusted target runner may validate the exact wrapper, every declared autotune configuration, all official and required boundary cases, live device limits, and the full benchmark set. If no such runner is callable, the current explicit FlagOS S2 authorization allows the fully gated package to use official FlagOS evaluation in Chrome as the target oracle. Keep it `package_ready`/`submitted` until that official record is terminal; only the record can establish target correctness and measured score.
 
-Only after target validation, full measurement, and the release hurdle pass, validate a ZIP containing exactly the seven reviewed files. Before submission, confirm the archive hash and Task 78 Batch 6 context, upload once, verify the new record, and wait on that record. After completion, append the official outcome to `results.jsonl`, then run `task78_results.py verify`, `render`, and `summary`. A later candidate takes its baselines from that updated ledger; do not overwrite root sources or historical packages.
+For a trusted preflight path, package only after target validation, full measurement, and the release hurdle pass. For the session-authorized official-evaluation path, package after the forecast hurdle and all local/review gates pass, then leave results unvalidated until the official record completes. Validate a ZIP containing exactly the seven reviewed files. Before each upload, resolve the selected task batch in Chrome, confirm the current team and visible daily quota, inspect the latest record and duplicate history, verify the exact archive hash, then click once. After completion, append the official outcome with `competition/flagos_s2_workflow.py record-result task78 <run-id>`, then run `task78_results.py verify`, `render`, and `summary`. A later candidate takes its baselines from that updated ledger; do not overwrite root sources or historical packages.
 
 ## Workspace and submission boundary
 
@@ -88,15 +89,14 @@ The final archive contains exactly seven `concat_and_cast_mha_k*.py` files at
 ZIP root. The generic implementation is evaluated twice—International A and
 International B—so the evaluation matrix contains eight target results.
 Package preparation, submission, official evaluation, and per-chip promotion
-are separate events. Submission authorization is scope-limited: the current
-standing authorization applies only to Task 78, Batch 6, in the currently
-logged-in team and within its currently visible daily quota. It does not
-authorize submissions to another task/batch or future competition. Before
-each upload, re-check the selected task/batch, team, quota, archive identity,
-and latest submission record in Chrome; click submit only once, then verify a
-new record before waiting. Respect FlagOS's minimum interval (strictly more
-than two minutes between submissions). If identity, upload status, quota, or
-the result is ambiguous, stop and inspect records instead of retrying blindly.
+are separate events. The current session authorization covers FlagOS S2 tasks
+and batches for the currently logged-in team, within the current visible daily
+quota. It does not extend to another competition or account. Before each
+upload, re-check the selected task/batch, team, quota, archive identity, and
+latest submission record in Chrome; click submit only once, then verify a new
+record before waiting. Respect FlagOS's minimum interval (strictly more than
+two minutes between submissions). If identity, upload status, quota, or the
+result is ambiguous, stop and inspect records instead of retrying blindly.
 Never replay the same archive to investigate a noisy score.
 
 ## Operator contract
@@ -186,21 +186,21 @@ A and B. A shared code change is not proof of shared target compatibility.
    adapter-declared case/config sets, all pass counts, queried device limits,
    timing method, invocation/job ID, and unmodified raw result. A self-authored
    manifest is a claim; a case subset is diagnostic only. If no trusted target
-   runner covers a chip, the candidate stays inconclusive and is not
-   submission-ready. Only an explicit user choice may turn it into a clearly
-   labeled diagnostic Arc experiment; that does not establish correctness or
-   performance and does not replace the best source.
+   runner covers a chip, the candidate stays inconclusive unless the current
+   FlagOS S2 session authorization permits official evaluation in Chrome as
+   the target oracle. Such a package remains an unvalidated experiment until
+   its result record completes; it does not replace the best source beforehand.
 9. **Package integrity.** Validate the final ZIP against the reviewed candidate
    directory with `validate_package.py`. It must contain exactly the seven
    root-level operator files, with byte-identical contents and recorded hashes.
    Any post-review source change or repackaged mismatch invalidates approval.
-10. **Submit, wait, and ledger.** In Chrome, verify the exact Task 78 Batch 6
-    submission context, team, remaining quota, package filename/hash, and that
-    this exact archive has not already been submitted. Under the scoped current
-    authorization, submit a gate-passing package once; record the official
-    submission ID/time immediately. Wait on that record until terminal state,
-    reopening the record rather than clicking submit again after UI ambiguity.
-    Append all eight outcomes and failures to `results.jsonl`, then regenerate
+10. **Submit, wait, and ledger.** In Chrome, verify the selected Task 78 batch,
+    current team, visible quota, package filename/hash, latest record, and that
+    this exact archive has not already been submitted. Under the current
+    FlagOS S2 session authorization, submit a gate-passing package once; record
+    the official submission ID/time immediately. Wait on that record until
+    terminal state, reopening the record rather than clicking submit again
+    after UI ambiguity. Append all eight outcomes and failures to `results.jsonl`, then regenerate
     `results.md`. Keep a separate best-observed score/source per chip, the best
     valid 8/8 aggregate, and anomaly flags. Do not drop or silently overwrite a
     single-run maximum; a failed chip invalidates only the all-chip aggregate,
@@ -208,7 +208,7 @@ A and B. A shared code change is not proof of shared target compatibility.
 
 ## Current target constraint
 
-Arc v24 failed on Enflame Case 1 because the launch requested `grid.x = 131072`
+Task 78 v24 failed on Enflame Case 1 because the launch requested `grid.x = 131072`
 while that hardware path reported a limit of `65535`. Any future Enflame design
 must justify and bound its grid mapping for the actual row count (for example,
 a persistent/grid-stride scheme); do not generalize this Enflame limit to other

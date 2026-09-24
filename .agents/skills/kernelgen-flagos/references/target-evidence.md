@@ -145,7 +145,7 @@ results never establish a task-level score.
 
 The computed geometric mean is a diagnostic comparison over the listed cases,
 not the task's official score (`official_score_computed` is always false in this
-gate). It does not override an operator's score formula or an Arc leaderboard
+gate). It does not override an operator's score formula or an official competition leaderboard
 result. Record any official aggregate separately. Without directly observed,
 preserved target output, correctness remains `target_reported`; incomplete
 timing remains `performance_reported_incomplete`. Only the workflow—not this

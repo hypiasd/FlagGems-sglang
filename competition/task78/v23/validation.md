@@ -17,7 +17,7 @@ The final gate result was:
 | Adversarial read-only sub-agent receipt | PASS, 0 unresolved blockers |
 | ZIP integrity and file count | PASS, exactly 7 files |
 
-The sub-agent left three medium-confidence risks for Arc inspection rather
+The sub-agent left three medium-confidence risks for target-runner inspection rather
 than silently treating them as solved: dynamic `range` lowering on Ascend,
 implicit scalar-mask broadcasting on Enflame, and possible narrow intermediate
 column arithmetic on Iluvatar's WIDE path. These are not known failures and
@@ -43,16 +43,16 @@ python3 competition/task78/kernelgen/run_candidate_gate.py \
 unzip -t competition/task78/flagos-task78-v23.zip
 ```
 
-## Arc result
+## Official FlagOS result
 
-Arc completed v23 at `09-19 20:41` with `5/8` passing chips. The surviving
+FlagOS completed v23 at `09-19 20:41` with `5/8` passing chips. The surviving
 scores were Iluvatar `2.19x`, MetaX `1.10x`, Hygon `2.28x`, International A
-`1.64x`, and International B `1.75x`. Because three chips failed, Arc showed
+`1.64x`, and International B `1.75x`. Because three chips failed, FlagOS showed
 no average acceleration for this submission.
 
 The failure details were:
 
-| Chip | Arc failure |
+| Chip | FlagOS failure |
 | --- | --- |
 | Enflame | `JITFunction.run() got multiple values for keyword argument 'BR'` in every reported case. |
 | Kunlunxin | Numerical mismatch; roughly 76%–82% of elements mismatched in the displayed cases, with very large absolute/relative errors. |
@@ -60,13 +60,13 @@ The failure details were:
 
 The results confirm that the local CPU model and static scan are useful
 pre-submit filters but do not model the target Triton runtime, vendor
-configuration schema, or device execution semantics. Arc remains the source
+configuration schema, or device execution semantics. FlagOS remains the source
 of target compilation, correctness, and speedup evidence.
 
 ## Post-v23 workflow audit
 
-The local record above reflects the gate that existed before the Arc run. After
-the Arc failures, the gate was strengthened. Re-running v23 under the new
+The local record above reflects the gate that existed before the FlagOS run. After
+the reported failures, the gate was strengthened. Re-running v23 under the new
 workflow rejects it before packaging because it contains:
 
 - Ascend `triton.Config(..., multibuffer=True)`, outside the portable config
@@ -79,6 +79,6 @@ workflow rejects it before packaging because it contains:
 
 The new CPU validator also sweeps every visible autotune config. On the v23
 Iluvatar source this independently reports missing output coverage for configs
-4 and 5 (the `BC=256` variants), reproducing a concrete failure without Arc.
+4 and 5 (the `BC=256` variants), reproducing a concrete failure in the local semantic model.
 This does not retroactively change the submitted score; it closes the gap for
 future candidates.
