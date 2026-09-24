@@ -177,14 +177,43 @@ def _autotuned_jit_names(tree: ast.AST) -> dict[str, ast.FunctionDef]:
     return result
 
 
+def _autotune_config_keys(node: ast.FunctionDef) -> tuple[set[str], bool]:
+    """Return literal Config keys and whether the full set was inspectable."""
+    calls = [
+        decorator
+        for decorator in node.decorator_list
+        if isinstance(decorator, ast.Call)
+        and isinstance(decorator.func, ast.Attribute)
+        and isinstance(decorator.func.value, ast.Name)
+        and decorator.func.value.id == "triton"
+        and decorator.func.attr == "autotune"
+    ]
+    if len(calls) != 1:
+        return set(), False
+    configs = next((kw.value for kw in calls[0].keywords if kw.arg == "configs"), None)
+    if not isinstance(configs, (ast.List, ast.Tuple)):
+        return set(), False
+    keys: set[str] = set()
+    for config in configs.elts:
+        if not isinstance(config, ast.Call) or not _triton_config_call(config):
+            return keys, False
+        if not config.args or not isinstance(config.args[0], ast.Dict):
+            return keys, False
+        for key in config.args[0].keys:
+            if not isinstance(key, ast.Constant) or not isinstance(key.value, str):
+                return keys, False
+            keys.add(key.value)
+    return keys, True
+
+
 def _autotune_binding_findings(tree: ast.AST) -> list[dict]:
-    """Catch explicit tile constexpr kwargs merged by an autotune wrapper.
+    """Catch explicit constexpr kwargs that duplicate literal autotune keys.
 
     Triton autotune implementations differ in how config kwargs are merged
-    with launch kwargs.  Passing a tile constexpr such as BR or NRC explicitly
-    is not portable: a target wrapper may provide the same key and raise the
-    exact duplicate-key TypeError seen on Enflame.  COMMON/WIDE and shape
-    arguments are intentionally not covered by this check.
+    with launch kwargs.  A duplicate is concrete only when the launch keyword
+    is also present in a config dictionary; merely passing another constexpr
+    such as BN is safe when the configs tune BM only.  Unknown config layouts
+    remain conservative for tile keywords.
     """
     tile_names = {"BT", "BH", "HS", "BN", "BC", "BR", "NRC"}
     autotuned = _autotuned_jit_names(tree)
@@ -196,8 +225,10 @@ def _autotune_binding_findings(tree: ast.AST) -> list[dict]:
         if not isinstance(value, ast.Name) or value.id not in autotuned:
             continue
         constexpr = _constexpr_params(autotuned[value.id])
+        config_keys, configs_inspected = _autotune_config_keys(autotuned[value.id])
         for keyword in node.keywords:
-            if keyword.arg in tile_names and keyword.arg in constexpr:
+            if (keyword.arg in tile_names and keyword.arg in constexpr
+                    and (keyword.arg in config_keys or not configs_inspected)):
                 findings.append({
                     "severity": "blocker",
                     "kind": "autotune-explicit-tile-constexpr",
@@ -508,6 +539,8 @@ def _next_power_of_two_findings(tree: ast.AST) -> list[dict]:
                 "severity": "blocker",
                 "kind": "uncapped-next-power-of-two",
                 "line": node.lineno,
+                "column": node.col_offset + 1,
+                "expression": ast.unparse(node),
                 "message": "next_power_of_2 result is not visibly capped; large dimensions can create invalid or very slow tiles.",
             })
     return findings
@@ -562,7 +595,7 @@ def inspect_source(path: Path) -> dict:
     findings.extend(_autotune_tile_grid_findings(tree))
 
     return {
-        "path": str(path),
+        "path": str(path.resolve()),
         "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
         "findings": findings,
         "blockers": [f for f in findings if f["severity"] == "blocker"],

@@ -78,20 +78,65 @@ class WorkflowHardGateRegression(unittest.TestCase):
         )
         self.assertIn("unknown-config-option", {item["kind"] for item in report["blockers"]})
 
-    def test_rejects_explicit_tile_kwargs_on_autotuned_launch(self) -> None:
+    def test_rejects_explicit_tile_kwargs_duplicated_by_autotune_config(self) -> None:
         report = self.inspect_source(
             """
-@triton.autotune(configs=[], key=[])
+@triton.autotune(configs=[triton.Config({'BR': 128}, num_warps=4)], key=[])
 @triton.jit
-def _kernel(out, BR: tl.constexpr, NRC: tl.constexpr):
+def _kernel(out, BR: tl.constexpr):
     pass
 
 def concat_and_cast_mha_k(out):
-    _kernel[(1,)](out, BR=128, NRC=1)
+    _kernel[(1,)](out, BR=128)
 """,
             "concat_and_cast_mha_k_enflame.py",
         )
         self.assertIn("autotune-explicit-tile-constexpr", {item["kind"] for item in report["blockers"]})
+
+    def test_allows_tile_constexpr_not_present_in_autotune_configs(self) -> None:
+        report = self.inspect_source(
+            """
+@triton.autotune(configs=[triton.Config({'BM': 1}, num_warps=4)], key=[])
+@triton.jit
+def _kernel(out, BM: tl.constexpr, BN: tl.constexpr, BR: tl.constexpr):
+    pass
+
+def concat_and_cast_mha_k(out):
+    _kernel[(1,)](out, BN=128, BR=64)
+""",
+            "concat_and_cast_mha_k_ascend.py",
+        )
+        self.assertNotIn("autotune-explicit-tile-constexpr", {item["kind"] for item in report["blockers"]})
+
+    def test_same_line_power_of_two_findings_have_distinct_source_identity(self) -> None:
+        source = (
+            "bn, br = triton.next_power_of_2(max(1, dn)), "
+            "triton.next_power_of_2(max(1, dr))\n"
+        )
+        report = self.inspect_source(
+            source
+        )
+        findings = [item for item in report["blockers"]
+                    if item["kind"] == "uncapped-next-power-of-two"]
+        ids = {
+            run_candidate_gate.canonical_json_sha256({"target_id": "default", **item})
+            for item in findings
+        }
+        self.assertEqual(len(findings), 2)
+        self.assertEqual(len(ids), 2)
+        expected_columns = {
+            source.index("triton.next_power_of_2(max(1, dn))") + 1,
+            source.index("triton.next_power_of_2(max(1, dr))") + 1,
+        }
+        self.assertEqual({item["column"] for item in findings}, expected_columns)
+        self.assertEqual({item["expression"] for item in findings}, {
+            "triton.next_power_of_2(max(1, dn))",
+            "triton.next_power_of_2(max(1, dr))",
+        })
+
+    def test_static_report_source_path_is_always_absolute(self) -> None:
+        report = self.inspect_source("pass\n")
+        self.assertEqual(report["path"], str(Path(report["path"]).resolve()))
 
     def test_rejects_masked_negative_pointer_and_scalar_mask(self) -> None:
         report = self.inspect_source(
