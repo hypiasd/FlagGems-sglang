@@ -1,6 +1,6 @@
 # Task 78 KernelGen adapter
 
-The reusable KernelGen workflow v5 is defined in
+The reusable KernelGen workflow v6 is defined in
 `.agents/skills/kernelgen-flagos/references/reliability-gates.md`. This file
 adds only Task 78's operator contract, backend matrix, submission policy, and
 observed target constraints. The general workflow's evidence requirements
@@ -17,6 +17,12 @@ Candidate artifacts live under:
 competition/task78/kernelgen/candidates/<run-id>/
 ```
 
+Each run has immutable `baseline/` and editable `source/` subdirectories. The
+`prepare_mixed_candidate.py` helper seeds them from independent per-chip
+best-observed sources. For the shared generic file, choose the source by the
+median of its International A and B results jointly; the two targets still
+remain separate in reporting.
+
 Keep one immutable run directory per generation/repair attempt, with the
 prompt, raw KernelGen response, returned source, hashes, test reports, both
 reviewers' raw outputs/receipts, and raw target evidence. Never overwrite the root submission files or a
@@ -26,8 +32,17 @@ not a submission package.
 The final archive contains exactly seven `concat_and_cast_mha_k*.py` files at
 ZIP root. The generic implementation is evaluated twice—International A and
 International B—so the evaluation matrix contains eight target results.
-Package preparation, user submission, official evaluation, and promotion of a
-new best are separate events. Do not submit to Arc on the user's behalf.
+Package preparation, submission, official evaluation, and per-chip promotion
+are separate events. Submission authorization is scope-limited: the current
+standing authorization applies only to Task 78, Batch 6, in the currently
+logged-in team and within its currently visible daily quota. It does not
+authorize submissions to another task/batch or future competition. Before
+each upload, re-check the selected task/batch, team, quota, archive identity,
+and latest submission record in Chrome; click submit only once, then verify a
+new record before waiting. Respect FlagOS's minimum interval (strictly more
+than two minutes between submissions). If identity, upload status, quota, or
+the result is ambiguous, stop and inspect records instead of retrying blindly.
+Never replay the same archive to investigate a noisy score.
 
 ## Operator contract
 
@@ -57,21 +72,37 @@ A and B. A shared code change is not proof of shared target compatibility.
 
 ## Workflow for each version
 
-1. **Freeze evidence.** Record the baseline version and source hashes, contract
-   and test revision, each chip's latest/best score, score validity, and exact
-   failures from the preceding Arc run. Keep the known-good source immutable.
+1. **Freeze evidence.** Verify `results.jsonl`, then record each chip's latest
+   score, best-observed score/source, same-source variance flag, contract and
+   test revision, and exact known failures. Source selection is per-chip, not
+   by a single whole-package version. Preserve the full aggregate champion
+   separately. Keep all source baselines immutable.
 2. **Plan one coherent batch.** For every implementation file, state the
    structural change, observed bottleneck, expected score effect, and the
-   shapes/failure conditions that could disprove it. Batch meaningful changes
-   so a scarce Arc submission tests a real hypothesis, not a one-line tweak.
-3. **Check runtime capability.** Confirm the needed KernelGen operation is
-   actually callable in the current agent tool registry. A project `.mcp.json`
-   entry is configuration evidence only. If the tool is absent, preserve the
-   diagnosis and ready-to-run request, but do not hand-write a candidate or
-   call it KernelGen output.
-4. **Generate in isolation.** Ask KernelGen for each target-specific source
-   using the exact contract and structural objective. Save every response and
-   hash. Do not let a response's `success` flag stand in for tests.
+   shapes/failure conditions that could disprove it. Estimate each target's
+   expected and lower-bound score delta, confidence, and evidence basis; never
+   invent percentages to satisfy the gate. Task 78's scarce-submission hurdle
+   is a forecasted score of **at least 1.50× and at least 5% above the
+   per-chip champion composite** (whichever is higher), using the official
+   eight-target arithmetic mean. The lower-bound aggregate must not regress,
+   and no target lower bound may be worse than -5%. The 1.50× floor reflects
+   the stated competition goal; the 5% floor prevents tiny releases even when
+   the baseline changes. Use
+   `submission_hurdle.py <optimization-manifest.json>` to calculate this.
+   If official workload coverage or evidence is too weak to defend that
+   forecast, keep working or preserve the quota; a tiny/uncertain gain is not
+   a new submission version.
+3. **Check runtime capability and source method.** Confirm the needed KernelGen
+   operation is actually callable in the current agent tool registry. A
+   project `.mcp.json` entry is configuration evidence only. If KernelGen is
+   absent, do not silently switch methods: use a non-KernelGen authoring method
+   only when the user has explicitly authorized that method for this run, and
+   label every source/report `agent-authored` (never KernelGen output).
+4. **Generate in isolation.** Use the authorized source method to create each
+   target-specific source from its own archived per-chip champion. Save the
+   request or hypothesis, source method, exact champion archive/member/hash,
+   candidate source, and hashes. Do not let a generator's `success` flag stand
+   in for tests.
 5. **Local semantic checks.** Run syntax/public-entry checks and the isolated
    CPU semantic suite, including visible autotune configurations and
    boundary/stride/empty/wide-dimension cases. These may run before review;
@@ -84,9 +115,13 @@ A and B. A shared code change is not proof of shared target compatibility.
    cannot prove the agents ran or that their reasoning is right. A blocker or
    unresolved finding means repair and a complete new review cycle.
 7. **Deterministic gate.** Run the compiler-risk scan after Stage A, then run
-   `run_candidate_gate.py` with both receipts and the exact baseline directory.
-   This gate can reject semantic/source risks; it cannot certify a vendor
-   compiler, target runtime, or speedup.
+   `run_candidate_gate.py` with both receipts, the exact per-chip baseline,
+   and `--require-structural-delta`. The manifest must bind every candidate
+   and baseline source hash to its falsifiable hypothesis. The AST-shape check
+   rejects unchanged and constants/comments/names-only rewrites; it cannot
+   decide whether a structurally different kernel is faster. The source
+   reviewers and performance hurdle remain necessary. This gate cannot certify
+   a vendor compiler, target runtime, or speedup.
 8. **Target evidence and decision.** A candidate is not submission-ready until
    a trusted live runner has preflighted every backend: invoked the real public
    entrypoint/config path, compiled and exercised all declared configurations,
@@ -104,11 +139,17 @@ A and B. A shared code change is not proof of shared target compatibility.
    directory with `validate_package.py`. It must contain exactly the seven
    root-level operator files, with byte-identical contents and recorded hashes.
    Any post-review source change or repackaged mismatch invalidates approval.
-10. **Arc and ledger.** After the user submits, append the official result for
-   each of the eight evaluations, including failures and exact diagnostics.
-   Update the per-chip best table only from valid completed results, retaining
-   anomalous single-run values with an instability note. A single chip failure
-   means the submission has no valid all-chip aggregate.
+10. **Submit, wait, and ledger.** In Chrome, verify the exact Task 78 Batch 6
+    submission context, team, remaining quota, package filename/hash, and that
+    this exact archive has not already been submitted. Under the scoped current
+    authorization, submit a gate-passing package once; record the official
+    submission ID/time immediately. Wait on that record until terminal state,
+    reopening the record rather than clicking submit again after UI ambiguity.
+    Append all eight outcomes and failures to `results.jsonl`, then regenerate
+    `results.md`. Keep a separate best-observed score/source per chip, the best
+    valid 8/8 aggregate, and anomaly flags. Do not drop or silently overwrite a
+    single-run maximum; a failed chip invalidates only the all-chip aggregate,
+    not the other chips' passing observations.
 
 ## Current target constraint
 
@@ -126,17 +167,19 @@ Run from the repository root:
 ```sh
 python3 -m py_compile competition/task78/kernelgen/candidates/<run-id>/*.py
 python3 competition/task78/validate_cpu.py \
-  --source-dir competition/task78/kernelgen/candidates/<run-id> \
+  --source-dir competition/task78/kernelgen/candidates/<run-id>/source \
   --all --autotune-sweep
 # First: save the output of a fresh Stage A blind sub-agent to blind-review.raw.txt/json.
 # Only then run the scanner and give its report to a different Stage B sub-agent.
 python3 competition/task78/kernelgen/review_candidate.py \
-  competition/task78/kernelgen/candidates/<run-id> \
+  competition/task78/kernelgen/candidates/<run-id>/source \
   --json competition/task78/kernelgen/candidates/<run-id>/static-review.json
 # Save the Stage B raw response and normalized receipt as reconciliation-review.raw.txt/json.
 python3 competition/task78/kernelgen/run_candidate_gate.py \
-  competition/task78/kernelgen/candidates/<run-id> \
-  --baseline-source-dir competition/task78 \
+  competition/task78/kernelgen/candidates/<run-id>/source \
+  --baseline-source-dir competition/task78/kernelgen/candidates/<run-id>/baseline \
+  --require-structural-delta \
+  --structural-manifest competition/task78/kernelgen/candidates/<run-id>/optimization-manifest.json \
   --require-review \
   --blind-review-json competition/task78/kernelgen/candidates/<run-id>/blind-review.json \
   --review-json competition/task78/kernelgen/candidates/<run-id>/reconciliation-review.json \
@@ -153,7 +196,7 @@ python3 .agents/skills/kernelgen-flagos/scripts/kernelgen_gate.py \
   --baseline-source <exact-baseline-source.py> \
   --raw-target-result <unmodified-live-result.json>
 python3 competition/task78/kernelgen/validate_package.py \
-  competition/task78/kernelgen/candidates/<run-id> \
+  competition/task78/kernelgen/candidates/<run-id>/source \
   competition/task78/kernelgen/candidates/<run-id>/submission.zip
 ```
 

@@ -21,6 +21,7 @@ import tempfile
 GENERIC_SCRIPTS = Path(__file__).resolve().parents[3] / ".agents/skills/kernelgen-flagos/scripts"
 sys.path.insert(0, str(GENERIC_SCRIPTS))
 import reviewer_protocol
+import check_structural_delta
 
 
 BACKENDS = ("default", "ascend", "enflame", "hygon", "iluvatar", "kunlunxin", "metax")
@@ -95,6 +96,10 @@ def main(argv=None) -> int:
                         help="first-pass receipt from a fresh reviewer who was not shown static findings")
     parser.add_argument("--baseline-source-dir", type=Path,
                         help="exact baseline source directory reviewed by both agents")
+    parser.add_argument("--structural-manifest", type=Path,
+                        help="per-backend optimization hypotheses bound to exact candidate/baseline hashes")
+    parser.add_argument("--require-structural-delta", action="store_true",
+                        help="reject a candidate unless every backend has a manifest-bound AST-shape delta")
     parser.add_argument("--require-review", action="store_true",
                         help="reject candidates without a passing review receipt")
     parser.add_argument("--compiler-review-json", type=Path,
@@ -193,6 +198,19 @@ def main(argv=None) -> int:
     expected_baseline_hashes, missing_baseline = source_hashes(
         args.baseline_source_dir.resolve() if args.baseline_source_dir else None
     )
+    if args.require_structural_delta and args.baseline_source_dir and args.structural_manifest:
+        structural = check_structural_delta.validate(
+            source_dir,
+            args.baseline_source_dir.resolve(),
+            args.structural_manifest.resolve(),
+        )
+    elif args.require_structural_delta:
+        structural = {
+            "passed": False,
+            "errors": ["--require-structural-delta needs --baseline-source-dir and --structural-manifest"],
+        }
+    else:
+        structural = {"passed": True, "required": False}
     review = review_check(
         args.blind_review_json, args.review_json, compiler_review,
         args.require_review, expected_hashes, expected_baseline_hashes,
@@ -208,6 +226,7 @@ def main(argv=None) -> int:
         and semantic.get("passed") is True
         and compiler_review_passed
         and review["passed"]
+        and structural.get("passed") is True
     )
     validator_returncode = completed.returncode if completed is not None else None
     result = {
@@ -218,6 +237,7 @@ def main(argv=None) -> int:
         "semantic": semantic,
         "compiler_review": compiler_review,
         "review": review,
+        "structural_delta": structural,
         "validator_returncode": validator_returncode,
         "compiler_review_returncode": compiler_review_completed.returncode,
         "notice": "Local gate only; target compiler/device and performance remain unverified.",

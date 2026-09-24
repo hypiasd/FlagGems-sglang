@@ -1,4 +1,4 @@
-# KernelGen workflow v5: executable target preflight and evidence provenance
+# KernelGen workflow v6: target evidence, source provenance, and scarce-run value
 
 This is the shared workflow for generation, optimization, and platform
 specialization. A repository adapter may add operator-specific constraints,
@@ -9,10 +9,11 @@ target matrices, or scoring rules, but must not weaken these evidence gates.
 - A local MCP config file is not proof that the server is connected. A tool is
   available only when the current agent can actually call it from its tool
   registry.
-- If the required KernelGen tool is not callable, finish read-only diagnosis
-  and write a concrete experiment request if useful. Do not generate or patch
-  kernel source by another method while calling it KernelGen output. Resume
-  code generation only after the tool is available.
+- If the required KernelGen tool is not callable, record it as unavailable.
+  Do not silently switch authoring methods. A different method (for example,
+  agent-authored Triton) may be used only when the user explicitly authorizes
+  that method for the run; label its provenance honestly and never call it
+  KernelGen output. Configuration files are not evidence that generation ran.
 - Keep the known-good source and candidate isolated. A candidate never replaces
   the best source merely because it was generated, reviewed, or packaged.
 - Treat every result as evidence about an exact source hash, target, contract,
@@ -23,6 +24,17 @@ target matrices, or scoring rules, but must not weaken these evidence gates.
   required target passes an executable target preflight. If no trusted target
   runner/compiler is callable, the state remains `inconclusive`; source review
   cannot substitute for missing hardware evidence.
+- For quota-limited evaluations, pre-register the expected score delta,
+  uncertainty range, confidence, and supporting evidence for every target.
+  Apply the task adapter's minimum material-gain hurdle before packaging; do
+  not spend an attempt on a forecast that is small, unsupported, or dominated
+  by measurement variance. Never fabricate a numerical estimate just to pass
+  that gate.
+- Make the release floor explicit before editing. The adapter should derive it
+  from the user's stated goal, remaining evaluation quota, score aggregation,
+  and observed measurement variance. Revisit the threshold only when those
+  inputs change; do not smuggle task-specific numeric targets into this shared
+  workflow.
 
 ## Evidence states
 
@@ -198,12 +210,32 @@ candidate. Before packaging, show the expected benefit, structural diff,
 coverage by target, evidence gaps, and the exact artifact hash. Do not submit
 externally unless the user has explicitly asked for that action.
 
+For every target, write the expected and conservative score delta before
+implementation, explain the mechanism that can deliver it, and name evidence
+that would falsify the estimate. After completion, compare the forecast with
+the official result. A material syntax/AST change is not itself evidence of a
+material performance gain; if the aggregate forecast misses the adapter's
+release floor, keep the candidate experimental and do not create a new
+submission version.
+
 After an official run, append the result rather than overwriting history:
-package/source hash, timestamp, each target's status and score, exact failure
-diagnostics, and aggregate score if valid. Maintain both the best observed
-score per target and a stability note; retain anomalous raw values and label
-them rather than silently dropping them. Turn only reproduced or directly
-evidenced failures into reusable target constraints.
+package/source hash and identity provenance, timestamp, each target's status
+and score, exact failure diagnostics, and aggregate score if valid. Maintain
+the best observed source/score independently for every target as well as the
+best valid all-target aggregate; a partial package may still contain valid
+per-target evidence, but never a task-level aggregate. Compare repeated
+observations of byte-identical target source and retain every value while
+marking unusually wide spreads as provisional for review. An anomaly heuristic
+is a triage signal, not proof that a measurement is invalid. Turn only
+reproduced or directly evidenced failures into reusable target constraints.
+
+For browser-based competition submission, maintain a resumable lifecycle:
+`prepared → uploaded/submitted → record-confirmed → evaluating → completed`.
+Before any external submission, verify task, batch, team, quota, archive digest,
+and duplicate history. Click once; if the page or network leaves the result
+ambiguous, inspect the record list before any further action. Observe the
+platform's rate limit. Submission authorization must be explicit and scoped
+to the named task/batch/account; it does not transfer to other competitions.
 
 Evaluate source-review capability with blinded holdouts and mechanism-level
 mutations. Keep those results separate from production gates and static-rule

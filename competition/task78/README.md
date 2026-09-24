@@ -1,10 +1,24 @@
 # Task 78: `concat_and_cast_mha_k`
 
-Latest official run: [v24 validation record](v24/validation.md), submitted to
-Arc on 09-20 21:31. It completed at 7/8, so Arc did not report a valid average
-score. The team's best valid aggregate remains v12 at 1.27×. The root submission
-sources remain the Arc-proven v19 set (8/8, 1.25×); v24 is an experiment, not a
-promoted best. If testing v24 again, use the archived ZIP, not the root files.
+Latest official run: v25, submitted on 2026-09-24, completed 8/8 at 1.12×.
+The team's best valid all-chip aggregate remains v12 at 1.27×. Per-chip best
+implementations are distributed across different submissions; see the
+[append-only official result ledger](results.md), which records every Task 78
+Batch 6 result and derives each chip's best-observed source independently.
+The root files remain the historical v19 source set, **not** a synchronized
+copy of the per-chip champions. Do not use them as the next candidate baseline.
+
+The current best-observed per-chip source composite has an arithmetic mean of
+about 1.38×. To respect the limited submission quota and the stated 1.50× goal,
+the Task 78 release forecast must reach at least the larger of 1.50× and 105%
+of that composite mean. Its conservative aggregate must not regress, and no
+chip's lower-bound forecast may be worse than -5%. This is an eligibility
+forecast, not a claim that unmeasured code will achieve that score.
+
+The ledger also flags large score spreads for byte-identical per-chip sources.
+These are retained as observations, not discarded as “bad runs”; a flagged
+champion remains provisional until repeated official evaluation resolves the
+variance.
 
 v24 targeted the sub-1× chips from v19. It recovered two previously failing
 targets, but Enflame failed because its launch grid exceeded the reported
@@ -44,11 +58,14 @@ pass `--source-dir`; the reusable pre-Arc gate is
 These checks do not compile Triton or prove device performance. The local [validation record](v19/validation.md)
 contains the tested source hashes and results.
 
-For new candidates, follow the shared KernelGen workflow v5 and the Task 78
-adapter in `kernelgen/README.md`. Deterministic scans and independent source
-review are defect-finding gates, not substitutes for target execution. Keep
-package preparation separate from official submission and best-source
-promotion; record every Arc result and all eight target statuses.
+For new candidates, follow the shared KernelGen/FlagOS workflow and the Task 78
+adapter in `kernelgen/README.md`. A missing KernelGen tool must be recorded as
+unavailable; code authored by another method must not be mislabeled as
+KernelGen output. Deterministic scans and independent source review are
+defect-finding gates, not substitutes for target execution. Keep package
+preparation, authorized submission, official evaluation, and per-chip source
+promotion as separate decisions; append every official result and all eight
+target statuses to `results.jsonl`.
 
 Historical version directories and ZIPs remain reproducible references.
 The user uploads candidates to FlagOS for real eight-chip evaluation.
