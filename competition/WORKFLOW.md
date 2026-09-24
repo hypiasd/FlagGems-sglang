@@ -1,11 +1,50 @@
 # FlagOS S2 task-neutral KernelGen workflow
 
-Every FlagOS Season 2 task uses this shared lifecycle. A task adapter supplies only its
-operator contract, source set, target matrix, baseline selector, local gate,
-score hurdle, package contents, and result-ledger format. The shared layer owns
-run identity, durable checkpoints, evidence requirements, Chrome preflight,
-single-upload handling, resume behavior, quota/rate-limit checks, and result
-capture.
+Every FlagOS Season 2 task uses this same shared lifecycle, including tasks
+other than Task 60 and Task 78. A task adapter supplies its operator contract,
+source set, target matrix, baseline selector, local gate, score hurdle, package
+contents, and result-ledger format. The shared layer owns discovery inventory,
+campaign scheduling, run identity, durable checkpoints, evidence requirements,
+Chrome preflight, single-upload handling, resume behavior, quota/rate-limit
+checks, and result capture. Each task has its own candidate runs and result
+ledger; one task's contract, score, or terminal result is never reused for
+another task.
+
+## Campaign-wide discovery and queue
+
+The target scope is every task FlagOS currently marks open for the logged-in
+competition session. Refresh the exact open-task cards in Chrome as batches
+change. Capture each card's exact task id, title, batch, availability, and
+official detail URL in an inventory JSON, then import it:
+
+```sh
+python3 competition/flagos_s2_workflow.py import-inventory /path/to/chrome-task-inventory.json
+python3 competition/flagos_s2_workflow.py list-tasks
+```
+
+`list-tasks` merges the Chrome inventory, every local task adapter, and the
+latest checkpoint for each task. It prioritizes unsafe-to-repeat submission
+checkpoints first, then missing task contracts, then ready task iterations. A
+task absent from a complete Chrome inventory is not assumed open. A locked task
+waits for its batch; an open task without a valid profile is queued for
+onboarding and cannot generate or upload a candidate.
+
+The inventory must carry `schema_version: 1`, `competition: "flagos-s2"`, the
+official `source_url`, an ISO UTC `observed_at`, and
+`coverage: {"scope":"all-currently-open-tasks", "open_task_count":N,
+"complete":true, "captured_from_chrome":true}`. Each task row has exact
+`task_id` (`taskNN`), `task_name`, `batch_id`, `availability` (`open` or
+`locked`), and may include `detail_url`. A complete snapshot is accepted only
+when its open row count equals the count visibly reported by FlagOS. Keep
+team identity, cookies, credentials, and quota out of the inventory; those are
+refreshed in Chrome immediately before a submission.
+
+The agent applies the same candidate loop independently to every open task
+whose adapter is valid and whose goal is unmet. When the competition opens a
+new batch, refresh/import the Chrome inventory and continue with the newly open
+tasks. This is campaign scheduling across tasks; it does not flatten their
+different semantic contracts, chip targets, scoring formulas, or release
+hurdles into one generic kernel.
 
 ## Task adapters
 
@@ -109,6 +148,8 @@ record status, or target result cannot be established, preserve the checkpoint
 and stop at that named gap. All browser operations use Chrome.
 
 Unknown task profiles, absent MCP tools, failed review/contract/hurdle gates,
-and partial official results are explicit stop states. System or user
+and partial official results are explicit per-task stop states. System or user
 interruptions can still happen; resume reads the latest checkpoint and continues
-without repeating completed work or a submission.
+without repeating completed work or a submission. A pause on one task does not
+silently mark other tasks complete; the campaign queue keeps each task's
+readiness, blocker, and checkpoint visible.

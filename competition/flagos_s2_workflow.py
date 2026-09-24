@@ -27,6 +27,7 @@ PROFILE_DIR = COMPETITION / "workflow" / "tasks"
 STATE_ROOT = COMPETITION / ".autopilot"
 RUN_ROOT = STATE_ROOT / "runs"
 SESSION_AUTH = STATE_ROOT / "session-authorization.json"
+TASK_INVENTORY = STATE_ROOT / "task-inventory.json"
 STATES = {
     "planned", "tool_unavailable", "prepared", "generated",
     "locally_validated", "reviewed", "target_validated", "measured",
@@ -824,12 +825,181 @@ def render_generic_ledger(profile: dict, rows: list[dict]) -> None:
 
 
 def cmd_list(args) -> None:
-    rows = []
+    inventory = read_json(TASK_INVENTORY) if TASK_INVENTORY.is_file() else None
+    tasks = {}
+    if inventory is not None:
+        validate_inventory(inventory)
+        for item in inventory["tasks"]:
+            tasks[item["task_id"]] = {
+                "task_id": item["task_id"],
+                "task_name": item["task_name"],
+                "batch_id": item["batch_id"],
+                "availability": item["availability"],
+                "detail_url": item.get("detail_url"),
+                "inventory_source": inventory["source_url"],
+            }
+
     for path in sorted(PROFILE_DIR.glob("task[0-9]*.json")):
         profile = read_json(path)
-        rows.append({"task_id": profile.get("task_id"), "task_name": profile.get("task_name"),
-                     "profile_valid": not validate_profile(profile), "profile": str(path.relative_to(ROOT))})
-    print(json.dumps(rows, ensure_ascii=False, indent=2))
+        task_id = path.stem
+        tasks.setdefault(task_id, {
+            "task_id": task_id,
+            "task_name": profile.get("task_name"),
+            "availability": "unresolved",
+        })
+
+    rows = []
+    for task_id, row in sorted(tasks.items(), key=lambda item: task_sort_key(item[0])):
+        profile_file = PROFILE_DIR / f"{task_id}.json"
+        if profile_file.is_file():
+            profile = read_json(profile_file)
+            errors = validate_profile(profile)
+            if profile.get("task_id") != task_id:
+                errors.append(f"profile task_id does not match filename/id {task_id}")
+            row.update({
+                "profile": str(profile_file.relative_to(ROOT)),
+                "profile_valid": not errors,
+                "profile_errors": errors,
+                "readiness": "ready" if not errors else "invalid_profile",
+            })
+        else:
+            row.update({
+                "profile": None,
+                "profile_valid": False,
+                "profile_errors": ["task-specific contract/profile is missing"],
+                "readiness": "needs_task_adapter",
+            })
+        latest = latest_run_summary(task_id)
+        row["latest_run"] = latest
+        if latest and latest.get("state") in {"upload_armed", "submitted", "record_confirmed", "evaluating"}:
+            row["queue_priority"] = "resume_before_new_upload_or_iteration"
+        elif latest and latest.get("state") == "tool_unavailable":
+            row["queue_priority"] = "resume_after_kernelgen_is_live"
+        elif row.get("availability") == "locked":
+            row["queue_priority"] = "wait_for_batch_to_open"
+        elif row.get("availability") != "open":
+            row["queue_priority"] = "refresh_open_task_status_in_chrome"
+        elif row["readiness"] != "ready":
+            row["queue_priority"] = "onboard_task_contract"
+        elif latest and latest.get("state") == "promoted":
+            row["queue_priority"] = "goal_reached"
+        elif latest:
+            row["queue_priority"] = "resume_or_repair"
+        else:
+            row["queue_priority"] = "start_first_iteration"
+        rows.append(row)
+
+    discovery = {
+        "inventory_path": str(TASK_INVENTORY.relative_to(ROOT)),
+        "inventory_present": inventory is not None,
+        "observed_at": inventory.get("observed_at") if inventory else None,
+        "source_url": inventory.get("source_url") if inventory else None,
+        "open_task_count_from_chrome": inventory.get("coverage", {}).get("open_task_count") if inventory else None,
+        "open_tasks_listed": sum(1 for row in rows if row.get("availability") == "open"),
+        "inventory_complete": inventory.get("coverage", {}).get("complete") if inventory else False,
+    }
+    print(json.dumps({"discovery": discovery, "tasks": rows}, ensure_ascii=False, indent=2))
+
+
+def task_sort_key(task_id: str) -> tuple[int, str]:
+    match = re.fullmatch(r"task([0-9]+)", task_id)
+    return (int(match.group(1)) if match else sys.maxsize, task_id)
+
+
+def validate_inventory(inventory: dict) -> None:
+    if not isinstance(inventory, dict):
+        raise WorkflowError("Chrome task inventory must be a JSON object")
+    errors = []
+    if inventory.get("schema_version") != 1:
+        errors.append("schema_version must be 1")
+    if inventory.get("competition") != "flagos-s2":
+        errors.append("competition must be flagos-s2")
+    if not isinstance(inventory.get("source_url"), str) or not inventory["source_url"].startswith("https://flagos.io/"):
+        errors.append("source_url must be the official FlagOS HTTPS competition page")
+    if not isinstance(inventory.get("observed_at"), str) or not inventory["observed_at"].endswith("Z"):
+        errors.append("observed_at must be an ISO UTC timestamp ending in Z")
+    coverage = inventory.get("coverage")
+    if not isinstance(coverage, dict) or coverage.get("scope") != "all-currently-open-tasks":
+        errors.append("coverage.scope must be all-currently-open-tasks")
+    elif (not isinstance(coverage.get("open_task_count"), int)
+          or isinstance(coverage.get("open_task_count"), bool)
+          or coverage["open_task_count"] < 0
+          or not isinstance(coverage.get("complete"), bool)):
+        errors.append("coverage must include a nonnegative open_task_count and boolean complete")
+    tasks = inventory.get("tasks")
+    if not isinstance(tasks, list):
+        errors.append("tasks must be a list of exact task cards captured from Chrome")
+        tasks = []
+    seen = set()
+    open_count = 0
+    for index, item in enumerate(tasks):
+        prefix = f"tasks[{index}]"
+        if not isinstance(item, dict):
+            errors.append(f"{prefix} must be an object")
+            continue
+        task_id = item.get("task_id")
+        if not isinstance(task_id, str) or not re.fullmatch(r"task[0-9]+", task_id):
+            errors.append(f"{prefix}.task_id must be an exact id like task60")
+        elif task_id in seen:
+            errors.append(f"duplicate task id in Chrome inventory: {task_id}")
+        else:
+            seen.add(task_id)
+        for field in ("task_name", "batch_id"):
+            if not isinstance(item.get(field), str) or not item[field].strip():
+                errors.append(f"{prefix}.{field} must be captured from the task card")
+        if item.get("availability") not in {"open", "locked"}:
+            errors.append(f"{prefix}.availability must be open or locked")
+        if item.get("availability") == "open":
+            open_count += 1
+        if item.get("detail_url") is not None and not (
+            isinstance(item["detail_url"], str) and item["detail_url"].startswith("https://flagos.io/")
+        ):
+            errors.append(f"{prefix}.detail_url must be an official HTTPS URL when present")
+    if isinstance(coverage, dict) and coverage.get("complete") is True:
+        if open_count != coverage.get("open_task_count"):
+            errors.append("complete inventory must contain every currently open task card")
+        if coverage.get("captured_from_chrome") is not True:
+            errors.append("complete inventory must carry captured_from_chrome=true")
+    if errors:
+        raise WorkflowError("invalid Chrome task inventory:\n- " + "\n- ".join(errors))
+
+
+def latest_run_summary(task_id: str) -> dict | None:
+    task_root = RUN_ROOT / task_id
+    if not task_root.is_dir():
+        return None
+    candidates = []
+    for manifest_path in task_root.glob("*/run.json"):
+        try:
+            manifest = read_json(manifest_path)
+            state = current_state(manifest_path.parent)["state"]
+            candidates.append((str(manifest.get("created_at", "")), {
+                "run_id": manifest.get("run_id", manifest_path.parent.name),
+                "state": state,
+                "updated_at": read_json(manifest_path.parent / "state.json").get("updated_at"),
+                "repository_revision": manifest.get("repository_revision"),
+            }))
+        except (WorkflowError, OSError, json.JSONDecodeError):
+            candidates.append((str(manifest_path.stat().st_mtime_ns), {
+                "run_id": manifest_path.parent.name,
+                "state": "checkpoint_invalid",
+                "updated_at": None,
+                "repository_revision": None,
+            }))
+    return max(candidates, key=lambda item: item[0])[1] if candidates else None
+
+
+def cmd_import_inventory(args) -> None:
+    inventory = read_json(Path(args.inventory).resolve())
+    validate_inventory(inventory)
+    write_json(TASK_INVENTORY, inventory)
+    print(json.dumps({
+        "inventory_path": str(TASK_INVENTORY.relative_to(ROOT)),
+        "observed_at": inventory["observed_at"],
+        "listed_tasks": len(inventory["tasks"]),
+        "open_tasks": sum(item["availability"] == "open" for item in inventory["tasks"]),
+        "complete": inventory["coverage"]["complete"],
+    }, ensure_ascii=False, indent=2))
 
 
 def parser() -> argparse.ArgumentParser:
@@ -861,6 +1031,9 @@ def parser() -> argparse.ArgumentParser:
     record.set_defaults(func=cmd_record_result)
     ls = subs.add_parser("list-tasks")
     ls.set_defaults(func=cmd_list)
+    inventory = subs.add_parser("import-inventory")
+    inventory.add_argument("inventory", help="Chrome-captured JSON task inventory")
+    inventory.set_defaults(func=cmd_import_inventory)
     return root
 
 
