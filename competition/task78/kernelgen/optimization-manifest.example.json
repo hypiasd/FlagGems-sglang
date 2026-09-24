@@ -1,0 +1,159 @@
+{
+  "schema_version": 1,
+  "run_id": "REPLACE_WITH_THE_CANDIDATE_DIRECTORY_NAME",
+  "source_method": "kernelgen",
+  "performance_forecast": {
+    "iluvatar": {
+      "expected_delta_pct": null,
+      "lower_delta_pct": null,
+      "confidence": "low",
+      "evidence_basis": "historical_structural_comparison",
+      "evidence": [
+        "TODO: cite a same-target measurement or a comparable historical structural change"
+      ]
+    },
+    "metax": {
+      "expected_delta_pct": null,
+      "lower_delta_pct": null,
+      "confidence": "low",
+      "evidence_basis": "historical_structural_comparison",
+      "evidence": [
+        "TODO: cite a same-target measurement or a comparable historical structural change"
+      ]
+    },
+    "enflame": {
+      "expected_delta_pct": null,
+      "lower_delta_pct": null,
+      "confidence": "low",
+      "evidence_basis": "historical_structural_comparison",
+      "evidence": [
+        "TODO: cite a same-target measurement or a comparable historical structural change"
+      ]
+    },
+    "hygon": {
+      "expected_delta_pct": null,
+      "lower_delta_pct": null,
+      "confidence": "low",
+      "evidence_basis": "historical_structural_comparison",
+      "evidence": [
+        "TODO: cite a same-target measurement or a comparable historical structural change"
+      ]
+    },
+    "kunlunxin": {
+      "expected_delta_pct": null,
+      "lower_delta_pct": null,
+      "confidence": "low",
+      "evidence_basis": "historical_structural_comparison",
+      "evidence": [
+        "TODO: cite a same-target measurement or a comparable historical structural change"
+      ]
+    },
+    "ascend": {
+      "expected_delta_pct": null,
+      "lower_delta_pct": null,
+      "confidence": "low",
+      "evidence_basis": "historical_structural_comparison",
+      "evidence": [
+        "TODO: cite a same-target measurement or a comparable historical structural change"
+      ]
+    },
+    "intl_a": {
+      "expected_delta_pct": null,
+      "lower_delta_pct": null,
+      "confidence": "low",
+      "evidence_basis": "historical_structural_comparison",
+      "evidence": [
+        "TODO: cite a same-target measurement or a comparable historical structural change"
+      ]
+    },
+    "intl_b": {
+      "expected_delta_pct": null,
+      "lower_delta_pct": null,
+      "confidence": "low",
+      "evidence_basis": "historical_structural_comparison",
+      "evidence": [
+        "TODO: cite a same-target measurement or a comparable historical structural change"
+      ]
+    }
+  },
+  "backend_hypotheses": {
+    "default": {
+      "target_ids": [
+        "intl_a",
+        "intl_b"
+      ],
+      "baseline_sha256": "COPY_FROM_BASELINE_SELECTIONS",
+      "source_sha256": "FILL_AFTER_GENERATION",
+      "bottleneck_evidence": "TODO: cite target-specific result or source evidence",
+      "structural_change": "TODO: name the code/dataflow change; launch-constant tuning alone is insufficient",
+      "expected_mechanism": "TODO: explain why this change may improve this target",
+      "falsifier": "TODO: name a test or measurement that disproves the hypothesis"
+    },
+    "ascend": {
+      "target_ids": [
+        "ascend"
+      ],
+      "baseline_sha256": "COPY_FROM_BASELINE_SELECTIONS",
+      "source_sha256": "FILL_AFTER_GENERATION",
+      "bottleneck_evidence": "TODO: cite target-specific result or source evidence",
+      "structural_change": "TODO: name the code/dataflow change; launch-constant tuning alone is insufficient",
+      "expected_mechanism": "TODO: explain why this change may improve this target",
+      "falsifier": "TODO: name a test or measurement that disproves the hypothesis"
+    },
+    "enflame": {
+      "target_ids": [
+        "enflame"
+      ],
+      "baseline_sha256": "COPY_FROM_BASELINE_SELECTIONS",
+      "source_sha256": "FILL_AFTER_GENERATION",
+      "bottleneck_evidence": "TODO: cite target-specific result or source evidence",
+      "structural_change": "TODO: name the code/dataflow change; launch-constant tuning alone is insufficient",
+      "expected_mechanism": "TODO: explain why this change may improve this target",
+      "falsifier": "TODO: name a test or measurement that disproves the hypothesis"
+    },
+    "hygon": {
+      "target_ids": [
+        "hygon"
+      ],
+      "baseline_sha256": "COPY_FROM_BASELINE_SELECTIONS",
+      "source_sha256": "FILL_AFTER_GENERATION",
+      "bottleneck_evidence": "TODO: cite target-specific result or source evidence",
+      "structural_change": "TODO: name the code/dataflow change; launch-constant tuning alone is insufficient",
+      "expected_mechanism": "TODO: explain why this change may improve this target",
+      "falsifier": "TODO: name a test or measurement that disproves the hypothesis"
+    },
+    "iluvatar": {
+      "target_ids": [
+        "iluvatar"
+      ],
+      "baseline_sha256": "COPY_FROM_BASELINE_SELECTIONS",
+      "source_sha256": "FILL_AFTER_GENERATION",
+      "bottleneck_evidence": "TODO: cite target-specific result or source evidence",
+      "structural_change": "TODO: name the code/dataflow change; launch-constant tuning alone is insufficient",
+      "expected_mechanism": "TODO: explain why this change may improve this target",
+      "falsifier": "TODO: name a test or measurement that disproves the hypothesis"
+    },
+    "kunlunxin": {
+      "target_ids": [
+        "kunlunxin"
+      ],
+      "baseline_sha256": "COPY_FROM_BASELINE_SELECTIONS",
+      "source_sha256": "FILL_AFTER_GENERATION",
+      "bottleneck_evidence": "TODO: cite target-specific result or source evidence",
+      "structural_change": "TODO: name the code/dataflow change; launch-constant tuning alone is insufficient",
+      "expected_mechanism": "TODO: explain why this change may improve this target",
+      "falsifier": "TODO: name a test or measurement that disproves the hypothesis"
+    },
+    "metax": {
+      "target_ids": [
+        "metax"
+      ],
+      "baseline_sha256": "COPY_FROM_BASELINE_SELECTIONS",
+      "source_sha256": "FILL_AFTER_GENERATION",
+      "bottleneck_evidence": "TODO: cite target-specific result or source evidence",
+      "structural_change": "TODO: name the code/dataflow change; launch-constant tuning alone is insufficient",
+      "expected_mechanism": "TODO: explain why this change may improve this target",
+      "falsifier": "TODO: name a test or measurement that disproves the hypothesis"
+    }
+  }
+}

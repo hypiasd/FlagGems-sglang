@@ -20,6 +20,8 @@ These are retained as observations, not discarded as “bad runs”; a flagged
 champion remains provisional until repeated official evaluation resolves the
 variance.
 
+For a new candidate, follow the [Task 78 KernelGen end-to-end workflow](./kernelgen/README.md#end-to-end-workflow-and-run-states). It defines the run states, per-chip baseline snapshot, forecast gate, reviewer order, target preflight, package identity, one-upload submission lifecycle, and append-only result update.
+
 v24 targeted the sub-1× chips from v19. It recovered two previously failing
 targets, but Enflame failed because its launch grid exceeded the reported
 hardware limit; several surviving chip scores regressed. The exact per-chip

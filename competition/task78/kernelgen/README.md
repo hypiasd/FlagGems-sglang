@@ -9,6 +9,61 @@ remain authoritative.
 The first reviewer capability holdout results—including the v22 Hygon miss—are
 recorded in [`reviewer-holdout-experiments.md`](reviewer-holdout-experiments.md).
 
+## End-to-end workflow and run states
+
+Treat one candidate run as an immutable record. Repairs get a new run ID and point to the parent attempt. The seven files under `source/` are the implementation set; the shared generic file is evaluated separately on International A and B, for eight target results total. The [optimization manifest template](./optimization-manifest.example.json) binds the forecast, each backend hypothesis, and exact source hashes.
+
+| State | Required evidence | Next action |
+| --- | --- | --- |
+| `tool_unavailable` | The required operation is not callable in the active task. | Stop generation; retain only read-only diagnosis and the experiment plan. |
+| `prepared` | Contract, per-chip baseline snapshots, source method, and pre-registered forecast. | Continue only if the forecast gate passes and the required operation is callable. |
+| `generated` | Raw KernelGen response, returned source, target, invocation/job ID when available, and hashes. | Inspect source, then run local checks. |
+| `locally_validated` | Syntax, contract, CPU semantic checks, independent source reviews, and deterministic candidate gate pass. | Run the trusted preflight for every target. |
+| `target_validated` | Exact candidate compiled and passed the full declared correctness/configuration matrix on that target. | Measure the complete target workload using the same method as the baseline. |
+| `measured` | Repeated raw timings for the full required case set, exact source hashes, and score calculation. | Apply the release hurdle; package only if it passes. |
+| `arc_candidate` | Exact package hash, all required gates, and a recorded decision to prepare official evaluation. | Verify Task 78 Batch 6, team, quota, and duplicate history before one upload. |
+| `arc_submitted` / `arc_completed` | Confirmed official record, then its terminal per-target results. | Append the result and recalculate per-chip champions. |
+| `rejected` / `inconclusive` | A named gate failed, or its required evidence is missing or mismatched. | Preserve the run; repair under a new run ID or stop. |
+
+A source review, CPU model, HTTP probe, config file, compile-only check, or partial benchmark cannot move a target to `target_validated` or `measured`. The run is ready only when every required target has the evidence needed for that next state.
+
+### Start or resume
+
+Run these checks from the repository root before creating a candidate:
+
+```sh
+python3 competition/task78/kernelgen/task78_results.py verify
+python3 competition/task78/kernelgen/task78_results.py summary
+```
+
+Then use [`kernelgen-mcp-setup.md`](../../../.agents/skills/kernelgen-flagos/kernelgen-mcp-setup.md) for the active client's setup and verify the required operation in the current task's live tool registry. For Codex, the checkout's `.mcp.json` is not the server registration source. If the operation is absent, stop before creating candidate source.
+
+After the tool is callable, create a unique run from the append-only result ledger and copy the forecast template:
+
+```sh
+python3 competition/task78/kernelgen/prepare_mixed_candidate.py <run-id>
+cp competition/task78/kernelgen/optimization-manifest.example.json \
+  competition/task78/kernelgen/candidates/<run-id>/optimization-manifest.json
+```
+
+`prepare_mixed_candidate.py` snapshots the best-observed source for each chip into `baseline/` and seeds `source/` with those same bytes. This is a baseline, not generated output. The shared generic baseline is selected using both International A and B observations. Keep `baseline-selections.json` unchanged.
+
+Before the first source edit or KernelGen call, fill the eight target forecasts in `optimization-manifest.json` with evidence-backed expected and lower-bound deltas, then run:
+
+```sh
+python3 competition/task78/kernelgen/submission_hurdle.py \
+  competition/task78/kernelgen/candidates/<run-id>/optimization-manifest.json \
+  --json competition/task78/kernelgen/candidates/<run-id>/hurdle-report.json
+```
+
+The forecast must clear the larger of `1.50x` and 5% above the current champion composite; its lower-bound mean must preserve that composite, and no target lower bound may be below -5%. A failed or unsupported forecast ends the run before generation. Record `source_method` accurately; non-KernelGen authorship requires explicit user authorization for that run.
+
+After generation, bind each backend hypothesis to the actual `source/` and `baseline/` SHA-256 values. Run local checks, Stage A review, deterministic scan, Stage B review, and `run_candidate_gate.py` in that order. Any source change starts a new review and gate cycle under a new attempt ID.
+
+A trusted target runner must compile and execute the exact wrapper, every declared autotune configuration, every official and required boundary correctness case, live device-limit checks, and the full benchmark set. If no such runner is callable, record `inconclusive`; a diagnostic Arc upload is a separate experiment and requires an explicit user choice. Do not package or describe it as a normal performance release.
+
+Only after target validation, full measurement, and the release hurdle pass, validate a ZIP containing exactly the seven reviewed files. Before submission, confirm the archive hash and Task 78 Batch 6 context, upload once, verify the new record, and wait on that record. After completion, append the official outcome to `results.jsonl`, then run `task78_results.py verify`, `render`, and `summary`. A later candidate takes its baselines from that updated ledger; do not overwrite root sources or historical packages.
+
 ## Workspace and submission boundary
 
 Candidate artifacts live under:

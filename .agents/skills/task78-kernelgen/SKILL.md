@@ -18,10 +18,15 @@ Before doing anything else, read:
 - `competition/task78/README.md`
 - the current baseline source file for the requested platform
 
+Follow the **End-to-end workflow and run states** section in the KernelGen adapter as the execution order and evidence contract. Copy `competition/task78/kernelgen/optimization-manifest.example.json` into every new run; forecast evidence must be registered before the first source edit or generation call.
+
 Use the shared workflow in
 `.agents/skills/kernelgen-flagos/references/reliability-gates.md`. First
 confirm whether the KernelGen MCP operation is callable; a config file is not
 proof that the tool is live. If it is absent, do not silently change methods.
+For client-specific setup or recovery, read
+`.agents/skills/kernelgen-flagos/kernelgen-mcp-setup.md`; Codex uses its
+user-level `config.toml` and does not load this checkout's `.mcp.json`.
 Only use agent-authored or other non-KernelGen source when the user has
 explicitly authorized that method for this run, and label it `agent-authored`
 throughout the run record. Never claim that such code came from KernelGen.

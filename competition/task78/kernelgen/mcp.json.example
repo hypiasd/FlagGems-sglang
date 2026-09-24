@@ -4,7 +4,7 @@
       "type": "sse",
       "url": "https://kernelgen.flagos.io/sse/",
       "headers": {
-        "Authorization": "Bearer REPLACE_LOCALLY_DO_NOT_COMMIT"
+        "Authorization": "Bearer ${KERNELGEN_TOKEN}"
       }
     }
   }

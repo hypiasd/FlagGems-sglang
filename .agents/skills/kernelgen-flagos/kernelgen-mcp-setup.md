@@ -14,103 +14,53 @@
  limitations under the License.
  -->
 
-# KernelGen MCP Configuration Check & Auto-Setup
+# KernelGen MCP configuration and runtime verification
 
-This file checks project-local configuration and explains setup. A config file
-only proves that configuration was written; it does not prove that the current
-agent session connected the server or exposed its tools. Runtime availability
-must be checked in the current tool registry before calling KernelGen.
+This guide separates local configuration from a live KernelGen connection. A config file, successful HTTP handshake, or server-side `tools/list` response does not prove that the current agent can call the tool. Code generation may start only after the required operation is visible in the active tool registry.
 
----
+## Choose the client configuration
 
-## Step 1: Check Whether MCP Is Already Configured
+### Codex
 
-Use the Read tool to check the following files in order (only check project-local paths — do not read the user's home directory):
+Codex reads MCP servers from the user-level `config.toml`; it does not load this checkout's `.mcp.json`. Merge this block into `~/.codex/config.toml` without replacing other entries:
 
-1. `.mcp.json`
-2. `.claude/settings.json`
-
-For each file:
-- If the file does not exist, skip it
-- If the file exists, parse the JSON and check whether `mcpServers` contains a key that includes `kernelgen` (case-insensitive)
-
-**Decision rules**:
-- Found in any file → record **configured** and continue to the runtime check below.
-- Not found in either file → **not configured**, proceed to Step 2.
-
-After reading configuration, check whether the required operation (`generate_kernel`,
-`optimize_kernel`, or `specialize_kernel`) is actually visible and callable in the
-current agent's tool registry. Never infer this from the JSON key alone.
-
-- Configured and callable → continue to the selected sub-skill.
-- Configured but not callable → report **configured, runtime unavailable**. Do not
-  ask for or rotate the token, rewrite the config, or claim that a restart will
-  definitely fix it. If this config was just added or changed, ask the user to
-  restart/reload once; otherwise check the client connection and resume after the
-  tool is exposed. Code generation must remain stopped, though read-only diagnosis
-  and an experiment plan may continue.
-- Not configured → proceed to Step 2.
-
----
-
-## Step 2: Guide the User to Configure a Local Token
-
-Never ask the user to paste a KernelGen Token into chat and never write a real
-token into a tracked file. Tell the user to copy
-`competition/task78/kernelgen/mcp.json.example` to the project-root
-`.mcp.json`, replace the placeholder locally, and keep `.mcp.json` untracked.
-
-Output the following message when configuration is absent:
-
-```
-The KernelGen MCP toolset is not yet configured for this checkout.
-
-Create a local, untracked project-root .mcp.json from
-competition/task78/kernelgen/mcp.json.example and replace the token locally.
-Do not paste the token into chat or commit .mcp.json. Then restart the agent.
+```toml
+[mcp_servers.kernelgen-server]
+url = "https://kernelgen.flagos.io/sse/"
+enabled = true
+bearer_token_env_var = "KERNELGEN_TOKEN"
+startup_timeout_sec = 30
+tool_timeout_sec = 600
 ```
 
-Stop code generation here. Read-only diagnosis may continue, but do not claim a
-KernelGen run until the current agent can call the required tool.
+Set `KERNELGEN_TOKEN` in the environment that launches Codex. If the desktop app does not inherit that environment, replace `bearer_token_env_var` with a `http_headers_helper` command that reads the token from a local private credential source and prints only a JSON object such as `{"Authorization":"Bearer …"}` to stdout. Keep the helper outside Git and restrict its file permissions. Do not configure both auth methods; an explicit bearer token takes precedence over helper-provided Authorization.
 
----
+After changing the user config, reload Codex or start one new local task. Verify the server is enabled with `codex mcp list`, then confirm the needed operation is present in the new task's live tool registry. The command-line server list is a configuration/connection check; it does not replace the live tool check.
 
-## Step 3: Configuration Shape
+Official references: [Codex MCP setup](https://developers.openai.com/learn/docs-mcp) and [Codex config reference](https://learn.chatgpt.com/docs/config-file/config-reference).
 
-The local configuration must use the following shape, with the real token
-filled in locally:
+### Clients that read the project `.mcp.json`
 
-**Target configuration format** (written to `.mcp.json`):
+`competition/task78/kernelgen/mcp.json.example` is for clients that support this project-level JSON format. It uses environment-variable expansion so the token stays out of the file. For Claude Code, set `KERNELGEN_TOKEN` before launching the client and approve the project MCP server when prompted. See the [Claude Code MCP guide](https://docs.anthropic.com/en/docs/claude-code/mcp).
 
-```json
-{
-  "mcpServers": {
-    "kernelgen-server": {
-      "type": "sse",
-      "url": "https://kernelgen.flagos.io/sse/",
-      "headers": {
-        "Authorization": "Bearer <USER_TOKEN>"
-      }
-    }
-  }
-}
-```
+Other clients may use a different file, scope, or transport name. Follow that client's current documentation; do not copy a Codex TOML block into a JSON config or assume a project `.mcp.json` is shared across applications.
 
-**Important notes**:
-- The MCP service URL is fixed as `https://kernelgen.flagos.io/sse/` — the user does not need to provide it
-- The example server key is `kernelgen-server`; the actual operation names must still be taken from the live tool registry, not inferred from this key.
-- Never overwrite other configuration entries in the file
+## Verify the runtime
 
----
+1. Check the configuration location for the active client. Never print or paste the token while inspecting it.
+2. Check that the client reports `kernelgen-server` enabled/connected. For Codex, `codex mcp list` checks the user-level server entry.
+3. In the active agent task, confirm the exact required operation is callable: `generate_kernel`, `optimize_kernel`, `specialize_kernel`, or `autotune_kernel`. Use the operation needed by the selected workflow.
+4. Record the result as `absent`, `configured_unavailable`, or `callable` in the run record. Only `callable` permits KernelGen generation.
 
-## Step 4: Prompt the User to Restart
+A successful direct HTTP `initialize` or `tools/list` request is useful service-side evidence, but it does not prove that the current agent loaded the server. If the operation is missing, stop generation and keep only read-only diagnosis and experiment planning.
 
-After the user has configured the local file, output the following to the user:
+## When the server is configured but the tool is missing
 
-```
-MCP configuration should now be present in the local .mcp.json. Please restart the agent for the configuration to take effect, then re-run the command.
-```
+- If the config was just added or changed, reload the client once and check a new task's live tool registry.
+- If it is still missing, inspect that client's MCP connection/startup diagnostics and the exact transport/auth error. Do not repeatedly restart, request a new token, or rewrite a working config without evidence of a specific fault.
+- If the endpoint is reachable and lists the expected operations but the active task still lacks them, report `configured_unavailable`. Preserve the candidate source and do not switch to hand-authored code unless the user explicitly authorizes that method for the run.
+- Never claim generation from configuration, a network probe, or a tool name mentioned in documentation. Save the raw response and returned source only after an actual registered tool call.
 
-**Stop code generation here.** When the user restarts and re-triggers the skill,
-check the live tool registry again; do not assume that configuration visibility
-means runtime availability.
+## Credential handling
+
+Never ask the user to paste a KernelGen token into chat. Keep real credentials in a local environment, ignored file, OS credential store, or private helper. Do not commit `.mcp.json`, Codex config, helper scripts containing credentials, request headers, or token-bearing logs. The tracked example contains only an environment-variable reference.

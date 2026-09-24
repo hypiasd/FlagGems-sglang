@@ -69,7 +69,7 @@ run-record fields are in [`references/run-record.md`](references/run-record.md):
 | `kernelgen-specialize.md` | Specialize Triton operators to target platforms (e.g., GPU → Ascend NPU) via MCP `specialize_kernel` |
 | `kernelgen-specialize-for-flaggems.md` | Platform specialization + **FlagGems** integration (4 modes: vendor-ops/vendor-fused/override-builtin/experimental) |
 | **MCP Configuration** | |
-| `kernelgen-mcp-setup.md` | Check and auto-configure the `kernelgen-server` MCP service (URL built-in, user only provides Token) |
+| `kernelgen-mcp-setup.md` | Configure the client-specific `kernelgen-server` entry and verify live tool availability; credentials stay local |
 | **Feedback** | |
 | `kernelgen-submit-feedback.md` | Submit bug reports and feedback via GitHub or email |
 
