@@ -12,22 +12,33 @@ another task.
 
 ## Campaign-wide discovery and queue
 
-The target scope is every task FlagOS currently marks open for the logged-in
-competition session. Refresh the exact open-task cards in Chrome as batches
-change. Capture each card's exact task id, title, batch, availability, and
-official detail URL in an inventory JSON, then import it:
+The inventory covers every task FlagOS currently marks open for the logged-in
+competition session, but visibility is not iteration authorization. The user
+chooses which task ids may be iterated. Refresh the exact open-task cards in
+Chrome as batches change. Capture each card's exact task id, title, batch,
+availability, and official detail URL in an inventory JSON, then import it:
 
 ```sh
 python3 competition/flagos_s2_workflow.py import-inventory /path/to/chrome-task-inventory.json
 python3 competition/flagos_s2_workflow.py list-tasks
+python3 competition/flagos_s2_workflow.py list-tasks --tasks task78 task91
 ```
 
 `list-tasks` merges the Chrome inventory, every local task adapter, and the
-latest checkpoint for each task. It prioritizes unsafe-to-repeat submission
-checkpoints first, then missing task contracts, then ready task iterations. A
-task absent from a complete Chrome inventory is not assumed open. A locked task
-waits for its batch; an open task without a valid profile is queued for
-onboarding and cannot generate or upload a candidate.
+latest checkpoint for each task. It sorts by actionable priority: recover an
+in-flight submission, record a terminal result, resume work already past
+generation, start a runnable task, check KernelGen, onboard an incomplete task,
+resolve a task-local evidence gap, then wait on unavailable shared capability.
+This keeps each task independent: a missing contract for one operator does not
+hold up another task whose adapter is ready. Its campaign summary exposes
+`open_task_overview_order`; each row separates profile `readiness` from runtime
+`execution_readiness`. `queue_order` and `next_task` stay empty unless task ids
+are explicitly supplied with `--tasks`. Only those selected ids enter the
+iteration queue; all other tasks remain read-only overview rows.
+A task absent from a complete Chrome inventory is not assumed open. A locked
+task waits for its batch; an open task without a valid profile is marked for
+task-specific onboarding. It enters the iteration queue only after the user
+selects it.
 
 The inventory must carry `schema_version: 1`, `competition: "flagos-s2"`, the
 official `source_url`, an ISO UTC `observed_at`, and
@@ -39,12 +50,13 @@ when its open row count equals the count visibly reported by FlagOS. Keep
 team identity, cookies, credentials, and quota out of the inventory; those are
 refreshed in Chrome immediately before a submission.
 
-The agent applies the same candidate loop independently to every open task
-whose adapter is valid and whose goal is unmet. When the competition opens a
-new batch, refresh/import the Chrome inventory and continue with the newly open
-tasks. This is campaign scheduling across tasks; it does not flatten their
-different semantic contracts, chip targets, scoring formulas, or release
-hurdles into one generic kernel.
+The agent applies the same candidate loop independently to each user-selected
+task whose adapter is valid and whose goal is unmet. If the user has not named
+tasks, the workflow only reports the open-task overview. When the competition
+opens a new batch, refresh/import the Chrome inventory; newly open tasks still
+need explicit user selection before iteration. The shared lifecycle does not
+flatten task-specific semantic contracts, chip targets, scoring formulas, or
+release hurdles into one generic kernel.
 
 ## Task adapters
 
@@ -54,12 +66,18 @@ hurdles into one generic kernel.
   [`task78.json`](workflow/tasks/task78.json).
 - Every other open task: copy [`template.json`](workflow/tasks/template.json) to
   `workflow/tasks/taskNN.json`. Fill it from that task's official FlagOS page
-  and add the task-local contract validator and append-only result ledger. The
-  unresolved `FILL`/`TODO` markers are rejected by profile validation; a task
-  does not inherit Task 60 or Task 78 semantics by default.
+  and add the exact official reference source, task-local contract validator,
+  and append-only result ledger. The template starts in
+  `generate_from_official_reference` mode because a newly onboarded task has
+  no candidate source to optimize yet. The reference file is hash-pinned; the
+  generated candidate paths may be absent until KernelGen returns them. Later
+  runs can switch to `optimize_existing_sources` after an evaluated source is
+  selected. The unresolved `FILL`/`TODO` markers are rejected by profile
+  validation; a task does not inherit Task 60 or Task 78 semantics by default.
   Missing or unknown contract fields block candidate generation; another task's
   case IDs, chip routing, aggregate formula, batch, or release hurdle must not
-  be inferred.
+  be inferred. Candidate source basenames must match ZIP root members exactly;
+  a multi-file `generic-v1` adapter must map every target to its source member.
 
 The optional ignored runtime evidence file
 `competition/.autopilot/task-contract-evidence.json` records what Chrome showed
@@ -70,8 +88,8 @@ authorize generation. For example, the current Batch 6 snapshot contains 17
 open tasks (Task76–Task92); Task78 has a valid adapter, while the other task
 pages have partial contract captures and still need their exact case matrix,
 target routing, local semantic gate, source/baseline selection, and frozen
-release hurdle. These gaps block those tasks independently; the shared queue
-continues to list and resume every task.
+release hurdle. These gaps block those tasks independently; the overview keeps
+them visible without selecting them for iteration.
 
 ## Start and resume
 
@@ -79,12 +97,19 @@ From the project root:
 
 ```sh
 python3 competition/flagos_s2_workflow.py list-tasks
-python3 competition/flagos_s2_workflow.py validate-profile task60
-python3 competition/flagos_s2_workflow.py validate-profile task78
-python3 competition/flagos_s2_workflow.py new-run task78 auto-20260924-01 \
-  --reason "continue the current FlagOS S2 optimization"
-python3 competition/flagos_s2_workflow.py resume task78 auto-20260924-01
+python3 competition/flagos_s2_workflow.py list-tasks --tasks task78
+python3 competition/flagos_s2_workflow.py validate-profile taskNN
+python3 competition/flagos_s2_workflow.py new-run taskNN auto-YYYYMMDD-01 \
+  --reason "start the next FlagOS S2 task iteration"
+python3 competition/flagos_s2_workflow.py resume taskNN RUN_ID
 ```
+
+Replace `taskNN` with an open task that the user explicitly selected with
+`list-tasks --tasks`; `campaign.next_task` and `queue_order` only select among
+those named task ids.
+Use that task's own run ID, profile, evidence, and ledger. The queue only
+contains user-selected tasks; the open-task overview is informational and does
+not authorize iteration.
 
 Each run snapshots the profile and repository revision under the ignored
 `competition/.autopilot/runs/<task>/<run-id>/`. `events.jsonl` is append-only;
@@ -95,15 +120,26 @@ rendering can resume without duplicating a row. Every stage records the
 evidence needed to resume. A repair or another iteration receives a new run
 ID and `--parent-run-id`; an existing candidate or historical ZIP is never edited.
 
-Before generating any source, check the active KernelGen tool registry. A local
-MCP config or a successful server handshake is not enough. If the requested
+Before generating any source, check the active KernelGen tool registry for
+`generate_kernel`, `optimize_kernel`, and `specialize_kernel`. The queue accepts
+only a complete active-registry snapshot no more than five minutes old; a local
+MCP config or successful server handshake is not enough. If any required
 operation is absent, checkpoint `tool_unavailable` and stop source generation.
-Resume that run only after the exact operation appears in the live registry.
-This is a campaign-wide blocker: it applies to each ready task profile, while
-contract onboarding and read-only Chrome capture may continue for other tasks.
-`list-tasks` reports the latest registry observation in its campaign summary;
-recheck the live registry before generation rather than treating that snapshot
-as permanent capability evidence.
+Resume that task only after the exact operation appears in a fresh live
+registry. This blocks generation for selected tasks that need KernelGen, while
+already-generated runs and read-only Chrome capture may continue independently.
+Unselected tasks are not checkpointed or modified. `list-tasks` reports the
+latest registry observation but does not replace the live check immediately
+before generation.
+
+For an initial task generation, `prepared.baseline_hashes` pins the official
+reference source hash for each target and identifies `baseline_kind` as
+`official_reference`. For an optimization run, the same field pins the selected
+candidate source hash per target and uses `baseline_kind: "candidate_source"`.
+The `generated` checkpoint binds a SHA-256 to every exact ZIP root member. At
+`package_ready`, the workflow opens the ZIP, checks its exact member list and
+hash, and rejects any archive whose source bytes differ from KernelGen's
+recorded output.
 
 ## Shared lifecycle
 
@@ -128,8 +164,10 @@ The complete candidate sequence is:
    semantics, official case IDs, targets, batch, package rules, official score
    field, and the per-task goal. Refresh each task's latest valid result and
    per-target source champions from its own ledger.
-2. Check the live KernelGen operation. Snapshot baseline bytes and hashes;
-   register a falsifiable structural hypothesis and evidence-based expected and
+2. Check the live KernelGen operation. For an existing candidate, snapshot its
+   per-target source bytes and hashes. For a task's first kernel, snapshot the
+   exact official reference source hash as the generation seed. Register a
+   falsifiable structural hypothesis and evidence-based expected and
    conservative score deltas before generation.
 3. Generate an isolated candidate with KernelGen. Preserve request, raw
    response, invocation ID, returned sources, and hashes.

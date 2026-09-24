@@ -17,6 +17,7 @@
   "targets": ["iluvatar", "metax", "enflame", "hygon", "kunlunxin", "ascend", "intl_a", "intl_b"],
   "target_labels": {"iluvatar":"天数智芯","metax":"沐曦","enflame":"燧原","hygon":"海光","kunlunxin":"昆仑芯","ascend":"华为","intl_a":"国际通用 A","intl_b":"国际通用 B"},
   "baseline": {
+    "mode": "optimize_existing_sources",
     "selection": "task78-results-ledger-per-target-champion",
     "ledger": "competition/task78/results.jsonl",
     "selector": "competition/task78/kernelgen/prepare_mixed_candidate.py",

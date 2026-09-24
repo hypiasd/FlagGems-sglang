@@ -8,9 +8,14 @@
   "source_files": ["competition/taskNN/FILL.py"],
   "targets": ["FILL_EXACT_PLATFORM_TARGET_IDS"],
   "baseline": {
-    "selection": "best-valid-official-per-target",
+    "mode": "generate_from_official_reference",
+    "selection": "first-kernelgen-generation-from-frozen-official-reference",
+    "reference_source": {
+      "path": "competition/taskNN/FILL_official_reference.py",
+      "sha256": "FILL_OFFICIAL_REFERENCE_SHA256"
+    },
     "ledger": "competition/taskNN/results.jsonl",
-    "candidate_snapshot": "FILL_IMMUTABLE_SOURCE_SELECTION_RULE"
+    "candidate_snapshot": "freeze the complete official reference source before KernelGen generation"
   },
   "result_ledger": {
     "path": "competition/taskNN/results.jsonl",

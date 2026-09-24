@@ -36,6 +36,23 @@ STATES = {
     "package_ready", "upload_armed", "submitted", "record_confirmed",
     "upload_aborted", "evaluating", "completed", "promoted", "rejected", "inconclusive",
 }
+QUEUE_PRIORITY_ORDER = {
+    "resume_before_new_upload_or_iteration": 0,
+    "record_terminal_result": 1,
+    "resume_or_repair": 2,
+    "resume_after_kernelgen_is_live": 2,
+    "start_first_iteration": 3,
+    "check_kernelgen_registry": 3,
+    "onboard_task_contract": 4,
+    "resolve_inconclusive_evidence": 5,
+    "wait_for_kernelgen": 6,
+    "wait_for_batch_to_open": 7,
+    "refresh_open_task_status_in_chrome": 8,
+    "goal_reached": 9,
+}
+REQUIRED_KERNELGEN_OPERATIONS = {
+    "generate_kernel", "optimize_kernel", "specialize_kernel",
+}
 TRANSITIONS = {
     "planned": {"tool_unavailable", "prepared", "rejected", "inconclusive"},
     "tool_unavailable": {"tool_unavailable", "prepared", "rejected", "inconclusive"},
@@ -113,6 +130,10 @@ def validate_profile(profile: dict) -> list[str]:
         errors.append("task_id must look like task60")
     if not isinstance(profile["operator"], str) or not profile["operator"] or not isinstance(profile["public_entrypoint"], str) or not profile["public_entrypoint"]:
         errors.append("operator and public_entrypoint must be nonempty")
+    baseline = profile.get("baseline", {})
+    baseline_mode = baseline.get("mode", "optimize_existing_sources") if isinstance(baseline, dict) else None
+    if baseline_mode not in {"optimize_existing_sources", "generate_from_official_reference"}:
+        errors.append("baseline.mode must be optimize_existing_sources or generate_from_official_reference")
     sources = profile["source_files"]
     if not isinstance(sources, list) or not sources or any(not isinstance(raw, str) for raw in sources):
         errors.append("source_files must be a nonempty list")
@@ -123,7 +144,7 @@ def validate_profile(profile: dict) -> list[str]:
             path = Path(raw)
             if path.is_absolute() or ".." in path.parts:
                 errors.append(f"source path must stay within the repo: {raw}")
-            elif not (ROOT / path).is_file():
+            elif baseline_mode == "optimize_existing_sources" and not (ROOT / path).is_file():
                 errors.append(f"source file does not exist: {raw}")
     targets = profile["targets"]
     if (not isinstance(targets, list) or not targets
@@ -135,8 +156,22 @@ def validate_profile(profile: dict) -> list[str]:
             errors.append(f"{field} must be a nonempty object")
     baseline = profile.get("baseline", {})
     if isinstance(baseline, dict) and (not baseline.get("selection") or not baseline.get("ledger")
-                                       or not baseline.get("candidate_snapshot")):
+                                   or not baseline.get("candidate_snapshot")):
         errors.append("baseline must define selection, ledger, and immutable candidate snapshot")
+    if isinstance(baseline, dict) and baseline_mode == "generate_from_official_reference":
+        reference = baseline.get("reference_source")
+        if not isinstance(reference, dict) or not reference.get("path") or not reference.get("sha256"):
+            errors.append("generate_from_official_reference requires reference_source.path and reference_source.sha256")
+        else:
+            reference_path = Path(str(reference["path"]))
+            if reference_path.is_absolute() or ".." in reference_path.parts:
+                errors.append("baseline.reference_source.path must stay within the repo")
+            elif not (ROOT / reference_path).is_file():
+                errors.append(f"official reference source does not exist: {reference_path}")
+            elif not re.fullmatch(r"[0-9a-f]{64}", str(reference["sha256"])):
+                errors.append("baseline.reference_source.sha256 must be an exact lowercase SHA-256")
+            elif sha256_bytes((ROOT / reference_path).read_bytes()) != reference["sha256"]:
+                errors.append("baseline.reference_source.sha256 does not match the frozen official reference bytes")
     local_gate = profile.get("local_gate", {})
     if isinstance(local_gate, dict) and any(not local_gate.get(key) for key in ("command", "evidence_class", "contract")):
         errors.append("local_gate must define command, evidence_class, and semantic contract")
@@ -161,6 +196,27 @@ def validate_profile(profile: dict) -> list[str]:
         errors.append("package.root_members must list exact nonempty ZIP member names")
     elif len(members) != len(set(members)):
         errors.append("package.root_members must not contain duplicates")
+    elif any(Path(member).name != member or not member.endswith(".py") for member in members):
+        errors.append("package.root_members must be root-level UTF-8 .py filenames")
+    elif (isinstance(sources, list) and sources and all(isinstance(raw, str) for raw in sources)
+          and {Path(raw).name for raw in sources} != set(members)):
+        errors.append("source_files basenames must match package.root_members exactly")
+    target_source_map = profile.get("target_source_map")
+    ledger_for_mapping = profile.get("result_ledger")
+    ledger_format = ledger_for_mapping.get("format") if isinstance(ledger_for_mapping, dict) else None
+    valid_targets = (
+        isinstance(targets, list)
+        and all(isinstance(target, str) and target.strip() for target in targets)
+        and len(targets) == len(set(targets))
+    )
+    if (ledger_format == "generic-v1"
+            and isinstance(members, list) and len(members) > 1):
+        if (not isinstance(target_source_map, dict)
+                or not valid_targets
+                or set(target_source_map) != set(targets)
+                or any(not isinstance(member, str) or member not in members
+                       for member in target_source_map.values())):
+            errors.append("multi-file generic-v1 adapters must map every target to an exact package root member")
     ledger = profile.get("result_ledger", {})
     if isinstance(ledger, dict) and (not isinstance(ledger.get("format"), str)
                                      or ledger.get("format") not in {"generic-v1", "task78-v1"}):
@@ -326,17 +382,34 @@ def validate_transition(task_id: str, directory: Path, from_state: str, to_state
             raise WorkflowError("prepared requires a callable registered operation and its exact name")
         baseline_hashes = evidence.get("baseline_hashes")
         if not isinstance(baseline_hashes, dict) or set(baseline_hashes) != set(profile["targets"]):
-            raise WorkflowError("prepared requires a frozen source hash for every profile target")
+            raise WorkflowError("prepared requires a frozen baseline-input hash for every profile target")
         if any(not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value)
                for value in baseline_hashes.values()):
-            raise WorkflowError("every per-target baseline must be an exact SHA-256")
+            raise WorkflowError("every per-target baseline input must be an exact SHA-256")
+        baseline = profile["baseline"]
+        baseline_mode = baseline.get("mode", "optimize_existing_sources")
+        if baseline_mode == "generate_from_official_reference":
+            reference = baseline["reference_source"]
+            reference_hash = reference["sha256"]
+            expected = {target: reference_hash for target in profile["targets"]}
+            if evidence.get("baseline_kind") != "official_reference" or baseline_hashes != expected:
+                raise WorkflowError("initial generation must freeze the official reference hash as every target's baseline input")
+        elif evidence.get("baseline_kind", "candidate_source") != "candidate_source":
+            raise WorkflowError("existing-source optimization must identify its baseline inputs as candidate_source")
         if evidence.get("forecast_status") != "pass":
             raise WorkflowError("prepared requires a passing pre-registered forecast")
         if not evidence.get("frozen_task_goal") or not evidence.get("goal_source"):
             raise WorkflowError("prepared requires the task goal and its official evidence source")
     elif to_state == "generated":
-        if not evidence.get("request_sha256") or not evidence.get("source_hashes"):
+        source_hashes = evidence.get("source_hashes")
+        members = profile["package"].get("root_members", [])
+        if not evidence.get("request_sha256") or not isinstance(source_hashes, dict):
             raise WorkflowError("generated requires request and returned-source hashes")
+        if set(source_hashes) != set(members):
+            raise WorkflowError("generated source hashes must cover exactly the adapter's package root_members")
+        if any(not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value)
+               for value in source_hashes.values()):
+            raise WorkflowError("every returned package source must have an exact lowercase SHA-256")
         if not evidence.get("service_job_id"):
             raise WorkflowError("generated requires the service invocation/job id")
     elif to_state == "locally_validated":
@@ -371,6 +444,26 @@ def validate_transition(task_id: str, directory: Path, from_state: str, to_state
     elif to_state == "package_ready":
         if evidence.get("hurdle") != "pass" or not evidence.get("package_sha256"):
             raise WorkflowError("package_ready requires a passing release hurdle and package SHA-256")
+        artifact_path = (ROOT / str(evidence.get("artifact_path", ""))).resolve()
+        if (not evidence.get("artifact_path") or not artifact_path.is_file()
+                or not str(artifact_path).startswith(str(ROOT) + os.sep)):
+            raise WorkflowError("package_ready requires the exact ZIP artifact path inside the repository")
+        artifact_bytes = artifact_path.read_bytes()
+        if sha256_bytes(artifact_bytes) != evidence.get("package_sha256"):
+            raise WorkflowError("package_ready archive bytes do not match the frozen package SHA-256")
+        try:
+            with zipfile.ZipFile(artifact_path) as archive:
+                names = archive.namelist()
+                expected_members = profile["package"]["root_members"]
+                if set(names) != set(expected_members) or len(names) != len(expected_members):
+                    raise WorkflowError("package ZIP does not contain exactly the adapter's root_members")
+                packaged_hashes = {name: sha256_bytes(archive.read(name)) for name in expected_members}
+        except (OSError, zipfile.BadZipFile, KeyError) as exc:
+            raise WorkflowError(f"cannot verify package-ready ZIP: {exc}") from exc
+        generated = next((event.get("evidence", {}) for event in reversed(current_state(directory)["events"])
+                          if event.get("to") == "generated"), None)
+        if generated is None or packaged_hashes != generated.get("source_hashes"):
+            raise WorkflowError("package ZIP source bytes do not match the exact KernelGen outputs")
         if from_state == "reviewed":
             if evidence.get("target_validation_mode") != "official-flagos-evaluation":
                 raise WorkflowError("reviewed candidates need a trusted target preflight or the session-authorized official evaluation path")
@@ -828,6 +921,14 @@ def render_generic_ledger(profile: dict, rows: list[dict]) -> None:
 
 def cmd_list(args) -> None:
     inventory = read_json(TASK_INVENTORY) if TASK_INVENTORY.is_file() else None
+    selected_task_ids = args.tasks or []
+    if len(selected_task_ids) != len(set(selected_task_ids)):
+        raise WorkflowError("--tasks must not contain duplicate task ids")
+    if selected_task_ids and (
+            inventory is None
+            or inventory.get("coverage", {}).get("complete") is not True
+            or inventory.get("coverage", {}).get("captured_from_chrome") is not True):
+        raise WorkflowError("explicit task selection requires a complete current task inventory captured from Chrome")
     contract_document = read_json(TASK_CONTRACT_EVIDENCE) if TASK_CONTRACT_EVIDENCE.is_file() else None
     contract_rows = {}
     contract_document_errors = []
@@ -850,6 +951,7 @@ def cmd_list(args) -> None:
                 contract_rows[item["task_id"]] = item
 
     runtime_check = read_json(KERNELGEN_RUNTIME_CHECK) if KERNELGEN_RUNTIME_CHECK.is_file() else None
+    kernelgen_status, missing_operations = assess_kernelgen_runtime(runtime_check)
     tasks = {}
     if inventory is not None:
         validate_inventory(inventory)
@@ -910,23 +1012,65 @@ def cmd_list(args) -> None:
             row["contract_next_action"] = "resolve_missing_adapter_evidence_without_inference"
         latest = latest_run_summary(task_id)
         row["latest_run"] = latest
-        if latest and latest.get("state") in {"upload_armed", "submitted", "record_confirmed", "evaluating"}:
+        latest_state = latest.get("state") if latest else None
+        if latest_state in {"upload_armed", "submitted", "record_confirmed", "evaluating"}:
             row["queue_priority"] = "resume_before_new_upload_or_iteration"
-        elif latest and latest.get("state") == "tool_unavailable":
-            row["queue_priority"] = "resume_after_kernelgen_is_live"
+            row["execution_readiness"] = "resume_submission_checkpoint"
+        elif latest_state == "completed":
+            row["queue_priority"] = "record_terminal_result"
+            row["execution_readiness"] = "record_terminal_result"
+        elif row.get("availability") == "open" and row["readiness"] != "ready":
+            row["queue_priority"] = "onboard_task_contract"
+            row["execution_readiness"] = "needs_task_adapter"
         elif row.get("availability") == "locked":
             row["queue_priority"] = "wait_for_batch_to_open"
+            row["execution_readiness"] = "not_open"
         elif row.get("availability") != "open":
             row["queue_priority"] = "refresh_open_task_status_in_chrome"
-        elif row["readiness"] != "ready":
+            row["execution_readiness"] = "open_status_unconfirmed"
+        elif not row["profile_valid"]:
             row["queue_priority"] = "onboard_task_contract"
-        elif latest and latest.get("state") == "promoted":
+            row["execution_readiness"] = "needs_task_adapter"
+        elif latest_state == "inconclusive":
+            row["queue_priority"] = "resolve_inconclusive_evidence"
+            row["execution_readiness"] = "blocked_on_recorded_evidence_gap"
+        elif latest_state == "promoted":
             row["queue_priority"] = "goal_reached"
+            row["execution_readiness"] = "goal_reached"
+        elif latest_state in {None, "planned", "prepared", "tool_unavailable"}:
+            if kernelgen_status["state"] == "unchecked":
+                row["queue_priority"] = "check_kernelgen_registry"
+                row["execution_readiness"] = "kernelgen_unchecked"
+            elif missing_operations:
+                row["queue_priority"] = (
+                    "resume_after_kernelgen_is_live" if latest_state == "tool_unavailable"
+                    else "wait_for_kernelgen"
+                )
+                row["execution_readiness"] = "waiting_for_kernelgen"
+            elif latest_state == "tool_unavailable":
+                row["queue_priority"] = "resume_after_kernelgen_is_live"
+                row["execution_readiness"] = "ready_to_resume"
+            elif latest_state is None:
+                row["queue_priority"] = "start_first_iteration"
+                row["execution_readiness"] = "ready_to_generate"
+            else:
+                row["queue_priority"] = "resume_or_repair"
+                row["execution_readiness"] = "ready_to_resume"
         elif latest:
             row["queue_priority"] = "resume_or_repair"
+            row["execution_readiness"] = "ready_to_resume"
         else:
             row["queue_priority"] = "start_first_iteration"
+            row["execution_readiness"] = "ready_to_generate"
+        row["selected_for_iteration"] = task_id in selected_task_ids
         rows.append(row)
+
+    rows.sort(key=queue_sort_key)
+    known_open = {row["task_id"] for row in rows if row.get("availability") == "open"}
+    invalid_selection = [task_id for task_id in selected_task_ids if task_id not in known_open]
+    if invalid_selection:
+        raise WorkflowError("selected task ids are not marked open in the current Chrome inventory: "
+                            + ", ".join(invalid_selection))
 
     discovery = {
         "inventory_path": str(TASK_INVENTORY.relative_to(ROOT)),
@@ -940,26 +1084,30 @@ def cmd_list(args) -> None:
     open_rows = [row for row in rows if row.get("availability") == "open"]
     ready_open = [row for row in open_rows if row.get("profile_valid")]
     captured_open = [row for row in open_rows if row.get("contract_evidence")]
-    if runtime_check is None:
-        kernelgen_status = {"state": "unchecked", "source_generation_allowed": False}
-    else:
-        visible_tools = runtime_check.get("visible_tool_registry", [])
-        required_operations = runtime_check.get("required_operations", [])
-        missing_operations = [operation for operation in required_operations if operation not in visible_tools]
-        kernelgen_status = {
-            "state": "available" if not missing_operations else "operation_unavailable",
-            "checked_at": runtime_check.get("checked_at"),
-            "missing_operations": missing_operations,
-            "source_generation_allowed": not missing_operations,
-        }
+    open_queue = [row for row in rows if row.get("availability") == "open"]
+    selected_queue = [row for row in open_queue if row["selected_for_iteration"]]
     campaign = {
         "lifecycle": "shared-task-neutral",
-        "scope": "every task marked open in the current Chrome inventory",
+        "scope": "only task ids explicitly selected by the user are eligible for iteration",
         "open_task_count": len(open_rows),
         "open_tasks_with_contract_evidence": len(captured_open),
         "open_tasks_without_contract_evidence": len(open_rows) - len(captured_open),
         "open_tasks_with_valid_adapters": len(ready_open),
+        "open_tasks_waiting_for_kernelgen": sum(
+            row.get("execution_readiness") == "waiting_for_kernelgen" for row in open_rows
+        ),
         "kernelgen": kernelgen_status,
+        "selected_task_ids": selected_task_ids,
+        "selected_task_count": len(selected_queue),
+        "selection_required": not selected_task_ids,
+        "open_task_overview_order": [row["task_id"] for row in open_queue],
+        "queue_order": [row["task_id"] for row in selected_queue],
+        "next_task": ({
+            "task_id": selected_queue[0]["task_id"],
+            "task_name": selected_queue[0].get("task_name"),
+            "priority": selected_queue[0]["queue_priority"],
+            "next_action": selected_queue[0]["execution_readiness"],
+        } if selected_queue else None),
         "contract_evidence_errors": contract_document_errors,
     }
     print(json.dumps({"campaign": campaign, "discovery": discovery, "tasks": rows}, ensure_ascii=False, indent=2))
@@ -968,6 +1116,58 @@ def cmd_list(args) -> None:
 def task_sort_key(task_id: str) -> tuple[int, str]:
     match = re.fullmatch(r"task([0-9]+)", task_id)
     return (int(match.group(1)) if match else sys.maxsize, task_id)
+
+
+def queue_sort_key(row: dict) -> tuple[int, int, str]:
+    """Order the campaign by recovery and readiness, then stable task id."""
+    priority = QUEUE_PRIORITY_ORDER.get(row.get("queue_priority"), sys.maxsize)
+    task_number, task_id = task_sort_key(str(row.get("task_id", "")))
+    return priority, task_number, task_id
+
+
+def assess_kernelgen_runtime(runtime_check: dict | None) -> tuple[dict, list[str]]:
+    """Fail closed unless a fresh active registry snapshot proves every operation."""
+    if not isinstance(runtime_check, dict):
+        return ({"state": "unchecked", "source_generation_allowed": False},
+                sorted(REQUIRED_KERNELGEN_OPERATIONS))
+    checked_at = runtime_check.get("checked_at")
+    timestamp = None
+    try:
+        if isinstance(checked_at, str):
+            timestamp = datetime.fromisoformat(checked_at.replace("Z", "+00:00"))
+    except ValueError:
+        timestamp = None
+    age_seconds = (
+        (datetime.now(timezone.utc) - timestamp.astimezone(timezone.utc)).total_seconds()
+        if timestamp is not None and timestamp.tzinfo is not None else None
+    )
+    fresh = age_seconds is not None and -60 <= age_seconds <= 300
+    visible = runtime_check.get("visible_tool_registry")
+    visible_tools = (
+        set(visible) if isinstance(visible, list) and all(isinstance(x, str) for x in visible)
+        else set()
+    )
+    missing_operations = sorted(REQUIRED_KERNELGEN_OPERATIONS - visible_tools)
+    required_snapshot = runtime_check.get("required_operations")
+    exact_contract = (
+        isinstance(required_snapshot, list)
+        and all(isinstance(x, str) for x in required_snapshot)
+        and set(required_snapshot) == REQUIRED_KERNELGEN_OPERATIONS
+    )
+    registry_checked = runtime_check.get("active_registry_checked") is True
+    if not fresh or not registry_checked or not exact_contract:
+        return ({
+            "state": "unchecked",
+            "checked_at": checked_at,
+            "missing_operations": missing_operations,
+            "source_generation_allowed": False,
+        }, missing_operations or sorted(REQUIRED_KERNELGEN_OPERATIONS))
+    return ({
+        "state": "available" if not missing_operations else "operation_unavailable",
+        "checked_at": checked_at,
+        "missing_operations": missing_operations,
+        "source_generation_allowed": not missing_operations,
+    }, missing_operations)
 
 
 def validate_inventory(inventory: dict) -> None:
@@ -1094,6 +1294,8 @@ def parser() -> argparse.ArgumentParser:
     record.add_argument("run_id")
     record.set_defaults(func=cmd_record_result)
     ls = subs.add_parser("list-tasks")
+    ls.add_argument("--tasks", nargs="+", metavar="TASK_ID",
+                    help="explicitly select task ids for iteration; without this, show overview only")
     ls.set_defaults(func=cmd_list)
     inventory = subs.add_parser("import-inventory")
     inventory.add_argument("inventory", help="Chrome-captured JSON task inventory")
