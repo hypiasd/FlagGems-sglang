@@ -16,7 +16,7 @@ Treat one candidate run as an immutable record. Repairs get a new run ID and poi
 | State | Required evidence | Next action |
 | --- | --- | --- |
 | `tool_unavailable` | The required operation is not callable in the active task. | Stop generation; retain only read-only diagnosis and the experiment plan. |
-| `prepared` | Contract, per-chip baseline snapshots, source method, and pre-registered forecast. | Continue only if the forecast gate passes and the required operation is callable. |
+| `prepared` | Contract, per-chip baseline snapshots, callable operation, and frozen structural plan. The numeric forecast may be pending for a diagnostic candidate. | Generate and validate the candidate; packaging still requires the release forecast to pass. |
 | `generated` | Raw KernelGen response, returned source, target, invocation/job ID when available, and hashes. | Inspect source, then run local checks. |
 | `locally_validated` | Syntax, contract, CPU semantic checks, independent source reviews, and deterministic candidate gate pass. | Run the trusted preflight for every target. |
 | `target_validated` | Exact candidate compiled and passed the full declared correctness/configuration matrix on that target. | Measure the complete target workload using the same method as the baseline. |
@@ -39,7 +39,7 @@ python3 competition/task78/kernelgen/task78_results.py summary
 
 Then use [`kernelgen-mcp-setup.md`](../../../.agents/skills/kernelgen-flagos/kernelgen-mcp-setup.md) for the active client's setup and verify the required operation in the current task's live tool registry. For Codex, the checkout's `.mcp.json` is not the server registration source. If the operation is absent, stop before creating candidate source.
 
-After the tool is callable, create a unique run from the append-only result ledger and copy the forecast template:
+After the tool is callable, create a unique run from the append-only result ledger and copy the optimization manifest template:
 
 ```sh
 python3 competition/task78/kernelgen/prepare_mixed_candidate.py <run-id>
@@ -49,7 +49,7 @@ cp competition/task78/kernelgen/optimization-manifest.example.json \
 
 `prepare_mixed_candidate.py` snapshots the best-observed source for each chip into `baseline/` and seeds `source/` with those same bytes. This is a baseline, not generated output. The shared generic baseline is selected using both International A and B observations. Keep `baseline-selections.json` unchanged.
 
-Before the first source edit or KernelGen call, fill the eight target forecasts in `optimization-manifest.json` with evidence-backed expected and lower-bound deltas, then run:
+Before the first source edit or KernelGen call, freeze a structural plan for all seven source files in `generation-plan.json`. Numeric forecasts may remain pending while KernelGen produces a diagnostic candidate; this does not authorize packaging or submission. After inspecting the generated source and available target evidence, fill all eight forecasts in `optimization-manifest.json` and run:
 
 ```sh
 python3 competition/task78/kernelgen/submission_hurdle.py \
@@ -57,7 +57,7 @@ python3 competition/task78/kernelgen/submission_hurdle.py \
   --json competition/task78/kernelgen/candidates/<run-id>/hurdle-report.json
 ```
 
-The forecast must clear the larger of `1.50x` and 5% above the current champion composite; its lower-bound mean must preserve that composite, and no target lower bound may be below -5%. A failed or unsupported forecast ends the run before generation. Record `source_method` accurately; non-KernelGen authorship requires explicit user authorization for that run.
+The forecast must clear the larger of `1.50x` and 5% above the current champion composite; its lower-bound mean must preserve that composite, and no target lower bound may be below -5%. A failed or unsupported forecast blocks `package_ready` and upload while preserving the diagnostic candidate and its evidence. Record `source_method` accurately; non-KernelGen authorship requires explicit user authorization for that run.
 
 After generation, bind each backend hypothesis to the actual `source/` and `baseline/` SHA-256 values. Run local checks, Stage A review, deterministic scan, Stage B review, and `run_candidate_gate.py` in that order. Any source change starts a new review and gate cycle under a new attempt ID.
 

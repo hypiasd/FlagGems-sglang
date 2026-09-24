@@ -56,7 +56,7 @@ REQUIRED_KERNELGEN_OPERATIONS = {
 TRANSITIONS = {
     "planned": {"tool_unavailable", "prepared", "rejected", "inconclusive"},
     "tool_unavailable": {"tool_unavailable", "prepared", "rejected", "inconclusive"},
-    "prepared": {"generated", "rejected", "inconclusive"},
+    "prepared": {"prepared", "generated", "rejected", "inconclusive"},
     "generated": {"locally_validated", "rejected", "inconclusive"},
     "locally_validated": {"reviewed", "rejected", "inconclusive"},
     "reviewed": {"target_validated", "package_ready", "inconclusive", "rejected"},
@@ -396,22 +396,53 @@ def validate_transition(task_id: str, directory: Path, from_state: str, to_state
                 raise WorkflowError("initial generation must freeze the official reference hash as every target's baseline input")
         elif evidence.get("baseline_kind", "candidate_source") != "candidate_source":
             raise WorkflowError("existing-source optimization must identify its baseline inputs as candidate_source")
-        if evidence.get("forecast_status") != "pass":
-            raise WorkflowError("prepared requires a passing pre-registered forecast")
+        forecast_status = evidence.get("forecast_status")
+        if forecast_status == "pending":
+            plan_hash = evidence.get("generation_plan_sha256")
+            if (not isinstance(evidence.get("pre_generation_hypothesis"), str)
+                    or not evidence["pre_generation_hypothesis"].strip()
+                    or not isinstance(plan_hash, str)
+                    or not re.fullmatch(r"[0-9a-f]{64}", plan_hash)):
+                raise WorkflowError(
+                    "diagnostic generation requires a frozen structural hypothesis and plan SHA-256"
+                )
+        elif forecast_status != "pass":
+            raise WorkflowError("prepared forecast_status must be pass or pending for diagnostic generation")
         if not evidence.get("frozen_task_goal") or not evidence.get("goal_source"):
             raise WorkflowError("prepared requires the task goal and its official evidence source")
+        if from_state == "prepared":
+            if (evidence.get("activity") != "generation_started"
+                    or evidence.get("source_generation_started") is not True):
+                raise WorkflowError(
+                    "prepared self-checkpoint is reserved for a durable generation-start marker"
+                )
+        elif evidence.get("source_generation_started") is True:
+            raise WorkflowError("the first prepared checkpoint cannot claim generation already started")
     elif to_state == "generated":
         source_hashes = evidence.get("source_hashes")
         members = profile["package"].get("root_members", [])
         if not evidence.get("request_sha256") or not isinstance(source_hashes, dict):
             raise WorkflowError("generated requires request and returned-source hashes")
+        if not evidence.get("service_job_id"):
+            receipt_hash = evidence.get("service_call_receipt_sha256")
+            receipt_hashes = evidence.get("service_call_receipts_sha256")
+            receipt_bundle_valid = (
+                isinstance(receipt_hashes, dict)
+                and set(receipt_hashes) == set(members)
+                and all(isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value)
+                        for value in receipt_hashes.values())
+            )
+            if ((not isinstance(receipt_hash, str)
+                 or not re.fullmatch(r"[0-9a-f]{64}", receipt_hash))
+                    and not receipt_bundle_valid):
+                raise WorkflowError(
+                    "generated requires a service job id, saved synchronous receipt SHA-256, or complete per-member receipt hashes"
+                )
         if set(source_hashes) != set(members):
             raise WorkflowError("generated source hashes must cover exactly the adapter's package root_members")
         if any(not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value)
                for value in source_hashes.values()):
             raise WorkflowError("every returned package source must have an exact lowercase SHA-256")
-        if not evidence.get("service_job_id"):
-            raise WorkflowError("generated requires the service invocation/job id")
     elif to_state == "locally_validated":
         if evidence.get("contract") != "pass" or evidence.get("local_correctness") != "pass":
             raise WorkflowError("locally_validated requires contract and local semantic gates to pass")
@@ -644,7 +675,7 @@ def cmd_resume(args) -> None:
     actions = {
         "planned": "check the live KernelGen registry; do not edit source before callable",
         "tool_unavailable": "resume only after the required operation appears in the live registry",
-        "prepared": "call KernelGen with the frozen request and forecast",
+        "prepared": "call KernelGen with the frozen request and hypothesis; a pending forecast keeps the run diagnostic-only until the release hurdle passes",
         "generated": "run the adapter local contract and semantic gates",
         "locally_validated": "obtain two distinct fresh source-review receipts",
         "reviewed": "run trusted target preflight, or use the session-authorized official FlagOS evaluation path",
@@ -661,6 +692,10 @@ def cmd_resume(args) -> None:
         "rejected": "preserve the attempt and create a child run only for a justified repair",
         "inconclusive": "resolve the named evidence gap before continuing",
     }[state]
+    if state == "prepared" and latest.get("evidence", {}).get("source_generation_started") is True:
+        actions = (
+            "resume from the saved generation manifest; keep completed target responses and invoke only targets without a saved response"
+        )
     print(json.dumps({"task_id": args.task_id, "run_id": args.run_id, "state": state,
                       "updated_at": latest.get("at"), "next_action": actions,
                       "repository_revision": manifest.get("repository_revision"),

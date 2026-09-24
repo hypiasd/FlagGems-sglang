@@ -141,6 +141,14 @@ The `generated` checkpoint binds a SHA-256 to every exact ZIP root member. At
 hash, and rejects any archive whose source bytes differ from KernelGen's
 recorded output.
 
+Before the first KernelGen request, freeze every target request and its input
+hash under the run directory, then append a `prepared → prepared` event with
+`activity: generation_started`. Save each raw response and returned source as
+soon as that call completes. On resume, inspect the per-target response files
+and continue only missing calls; never overwrite a prior response. A pending
+forecast remains diagnostic-only, but it does not interrupt source generation,
+local validation, or review.
+
 ## Shared lifecycle
 
 ```text
@@ -153,8 +161,10 @@ planned → prepared → generated → locally_validated → reviewed
 When no trusted target runner exists, the current user-authorized path allows a
 candidate that passes its task-specific forecast, local contract/semantic gates,
 independent reviews, and deterministic checks to enter `package_ready` for an
-official FlagOS evaluation. That package remains an experiment until the
-terminal FlagOS record provides all target outcomes. Only an 8/8 record can
+official FlagOS evaluation. Generation and local review may proceed with a
+pending forecast, but that run remains diagnostic and cannot reach
+`package_ready`. The package remains an experiment until the terminal FlagOS
+record provides all target outcomes. Only an 8/8 record can
 validate all targets or yield a task-level aggregate. A failed/incomplete target
 stops promotion and creates a repair run if the evidence supports one.
 
@@ -167,10 +177,16 @@ The complete candidate sequence is:
 2. Check the live KernelGen operation. For an existing candidate, snapshot its
    per-target source bytes and hashes. For a task's first kernel, snapshot the
    exact official reference source hash as the generation seed. Register a
-   falsifiable structural hypothesis and evidence-based expected and
-   conservative score deltas before generation.
-3. Generate an isolated candidate with KernelGen. Preserve request, raw
-   response, invocation ID, returned sources, and hashes.
+   falsifiable structural hypothesis and freeze the generation plan before
+   generation. A diagnostic candidate may be generated while its numeric
+   forecast is pending; it cannot be packaged or submitted until the task's
+   evidence-based expected and conservative deltas pass the release hurdle.
+3. Persist the exact per-target requests and mark `generation_started` before
+   calling KernelGen. Generate the isolated candidate and preserve every raw
+   response, invocation/job ID when the service provides one, returned source,
+   and hash immediately. For synchronous operations without a job ID, bind the
+   saved raw call receipt by SHA-256. If interrupted, resume from those
+   artifacts and only invoke targets without a saved response.
 4. Run task-local syntax, contract, and semantic validation. Then run a fresh
    blind source review, a deterministic risk scan, and a second distinct review
    that reconciles the scan. Any edit starts a new run and review cycle.

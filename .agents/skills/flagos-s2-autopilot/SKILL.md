@@ -34,15 +34,19 @@ and the selected task's profile and adapter before generating source.
    for the selected task and pause its generation. Do not create checkpoints or
    candidates for unselected tasks. A local config file or server handshake is
    not enough.
-5. For the selected ready open task, freeze per-target baseline inputs and
-   forecast. An established adapter hashes its selected candidate source; a
-   first-time adapter hashes the exact official reference source used to seed
-   `generate_kernel`. Generate one immutable attempt and record a hash for each
-   exact ZIP root member. Run its contract and semantic checks, two distinct
-   fresh source reviews, and deterministic scan. Before `package_ready`, prove
-   the ZIP members and bytes match those recorded KernelGen outputs. Repairs
-   receive a new run ID. Return to `list-tasks` after each checkpoint transition
-   so another selected task can proceed.
+5. For the selected ready open task, freeze per-target baseline inputs and a
+   falsifiable structural generation plan. An established adapter hashes its
+   selected candidate source; a first-time adapter hashes the exact official
+   reference source used to seed `generate_kernel`. A numeric forecast may be
+   pending while an immutable diagnostic candidate is generated and validated.
+   Record a hash for each exact ZIP root member; run contract and semantic
+   checks, two distinct fresh source reviews, and deterministic scan. The task
+   release hurdle remains mandatory before `package_ready` or upload. Freeze
+   all exact target requests and input hashes before the first call, durably
+   mark `generation_started`, and save each raw response immediately. On
+   resume, continue only targets without saved responses; never overwrite an
+   invocation artifact. Repairs receive a new run ID. Return to `list-tasks`
+   after each checkpoint transition so another selected task can proceed.
 6. Prefer trusted complete target preflight. The current user authorization
    permits a fully gated FlagOS S2 package to use the official FlagOS
    evaluation in Chrome as the target oracle when no trusted runner exists.
