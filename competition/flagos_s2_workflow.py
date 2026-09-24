@@ -28,6 +28,8 @@ STATE_ROOT = COMPETITION / ".autopilot"
 RUN_ROOT = STATE_ROOT / "runs"
 SESSION_AUTH = STATE_ROOT / "session-authorization.json"
 TASK_INVENTORY = STATE_ROOT / "task-inventory.json"
+TASK_CONTRACT_EVIDENCE = STATE_ROOT / "task-contract-evidence.json"
+KERNELGEN_RUNTIME_CHECK = STATE_ROOT / "kernelgen-runtime-check.json"
 STATES = {
     "planned", "tool_unavailable", "prepared", "generated",
     "locally_validated", "reviewed", "target_validated", "measured",
@@ -826,6 +828,28 @@ def render_generic_ledger(profile: dict, rows: list[dict]) -> None:
 
 def cmd_list(args) -> None:
     inventory = read_json(TASK_INVENTORY) if TASK_INVENTORY.is_file() else None
+    contract_document = read_json(TASK_CONTRACT_EVIDENCE) if TASK_CONTRACT_EVIDENCE.is_file() else None
+    contract_rows = {}
+    contract_document_errors = []
+    if contract_document is not None:
+        if contract_document.get("schema_version") != 1:
+            contract_document_errors.append("task contract evidence schema_version must be 1")
+        if contract_document.get("competition") != "flagos-s2":
+            contract_document_errors.append("task contract evidence competition must be flagos-s2")
+        captured_tasks = contract_document.get("tasks")
+        if not isinstance(captured_tasks, list):
+            contract_document_errors.append("task contract evidence tasks must be a list")
+        else:
+            for item in captured_tasks:
+                if not isinstance(item, dict) or not isinstance(item.get("task_id"), str):
+                    contract_document_errors.append("task contract evidence contains a row without task_id")
+                    continue
+                if item["task_id"] in contract_rows:
+                    contract_document_errors.append(f"duplicate task contract evidence for {item['task_id']}")
+                    continue
+                contract_rows[item["task_id"]] = item
+
+    runtime_check = read_json(KERNELGEN_RUNTIME_CHECK) if KERNELGEN_RUNTIME_CHECK.is_file() else None
     tasks = {}
     if inventory is not None:
         validate_inventory(inventory)
@@ -850,6 +874,15 @@ def cmd_list(args) -> None:
 
     rows = []
     for task_id, row in sorted(tasks.items(), key=lambda item: task_sort_key(item[0])):
+        contract = contract_rows.get(task_id)
+        if contract is not None:
+            row["contract_evidence"] = {
+                "status": contract.get("status", "unknown"),
+                "capture_type": contract.get("capture_type"),
+                "operator_path": contract.get("operator_path"),
+                "missing_for_adapter": contract.get("missing_for_adapter", []),
+                "profile": contract.get("profile"),
+            }
         profile_file = PROFILE_DIR / f"{task_id}.json"
         if profile_file.is_file():
             profile = read_json(profile_file)
@@ -869,6 +902,12 @@ def cmd_list(args) -> None:
                 "profile_errors": ["task-specific contract/profile is missing"],
                 "readiness": "needs_task_adapter",
             })
+        if row["profile_valid"]:
+            row["contract_next_action"] = "use_validated_task_adapter"
+        elif contract is None:
+            row["contract_next_action"] = "capture_official_task_contract_in_chrome"
+        else:
+            row["contract_next_action"] = "resolve_missing_adapter_evidence_without_inference"
         latest = latest_run_summary(task_id)
         row["latest_run"] = latest
         if latest and latest.get("state") in {"upload_armed", "submitted", "record_confirmed", "evaluating"}:
@@ -898,7 +937,32 @@ def cmd_list(args) -> None:
         "open_tasks_listed": sum(1 for row in rows if row.get("availability") == "open"),
         "inventory_complete": inventory.get("coverage", {}).get("complete") if inventory else False,
     }
-    print(json.dumps({"discovery": discovery, "tasks": rows}, ensure_ascii=False, indent=2))
+    open_rows = [row for row in rows if row.get("availability") == "open"]
+    ready_open = [row for row in open_rows if row.get("profile_valid")]
+    captured_open = [row for row in open_rows if row.get("contract_evidence")]
+    if runtime_check is None:
+        kernelgen_status = {"state": "unchecked", "source_generation_allowed": False}
+    else:
+        visible_tools = runtime_check.get("visible_tool_registry", [])
+        required_operations = runtime_check.get("required_operations", [])
+        missing_operations = [operation for operation in required_operations if operation not in visible_tools]
+        kernelgen_status = {
+            "state": "available" if not missing_operations else "operation_unavailable",
+            "checked_at": runtime_check.get("checked_at"),
+            "missing_operations": missing_operations,
+            "source_generation_allowed": not missing_operations,
+        }
+    campaign = {
+        "lifecycle": "shared-task-neutral",
+        "scope": "every task marked open in the current Chrome inventory",
+        "open_task_count": len(open_rows),
+        "open_tasks_with_contract_evidence": len(captured_open),
+        "open_tasks_without_contract_evidence": len(open_rows) - len(captured_open),
+        "open_tasks_with_valid_adapters": len(ready_open),
+        "kernelgen": kernelgen_status,
+        "contract_evidence_errors": contract_document_errors,
+    }
+    print(json.dumps({"campaign": campaign, "discovery": discovery, "tasks": rows}, ensure_ascii=False, indent=2))
 
 
 def task_sort_key(task_id: str) -> tuple[int, str]:

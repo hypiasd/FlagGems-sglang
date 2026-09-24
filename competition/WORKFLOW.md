@@ -52,7 +52,7 @@ hurdles into one generic kernel.
   [`task60.json`](workflow/tasks/task60.json).
 - [Task 78: `concat_and_cast_mha_k`](task78/kernelgen/README.md), profile
   [`task78.json`](workflow/tasks/task78.json).
-- Future task: copy [`template.json`](workflow/tasks/template.json) to
+- Every other open task: copy [`template.json`](workflow/tasks/template.json) to
   `workflow/tasks/taskNN.json`. Fill it from that task's official FlagOS page
   and add the task-local contract validator and append-only result ledger. The
   unresolved `FILL`/`TODO` markers are rejected by profile validation; a task
@@ -60,6 +60,18 @@ hurdles into one generic kernel.
   Missing or unknown contract fields block candidate generation; another task's
   case IDs, chip routing, aggregate formula, batch, or release hurdle must not
   be inferred.
+
+The optional ignored runtime evidence file
+`competition/.autopilot/task-contract-evidence.json` records what Chrome showed
+for each current task and lists the missing adapter evidence. `list-tasks`
+surfaces this alongside profile readiness. A captured signature or reference
+formula is only onboarding evidence: it does not make a task adapter valid or
+authorize generation. For example, the current Batch 6 snapshot contains 17
+open tasks (Task76–Task92); Task78 has a valid adapter, while the other task
+pages have partial contract captures and still need their exact case matrix,
+target routing, local semantic gate, source/baseline selection, and frozen
+release hurdle. These gaps block those tasks independently; the shared queue
+continues to list and resume every task.
 
 ## Start and resume
 
@@ -87,6 +99,11 @@ Before generating any source, check the active KernelGen tool registry. A local
 MCP config or a successful server handshake is not enough. If the requested
 operation is absent, checkpoint `tool_unavailable` and stop source generation.
 Resume that run only after the exact operation appears in the live registry.
+This is a campaign-wide blocker: it applies to each ready task profile, while
+contract onboarding and read-only Chrome capture may continue for other tasks.
+`list-tasks` reports the latest registry observation in its campaign summary;
+recheck the live registry before generation rather than treating that snapshot
+as permanent capability evidence.
 
 ## Shared lifecycle
 
