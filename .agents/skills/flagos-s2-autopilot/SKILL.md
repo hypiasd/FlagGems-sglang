@@ -48,6 +48,16 @@ and the selected task's profile and adapter before generating source.
    is unavailable. System or user interruptions can still happen; resume from
    the queue and each task's own checkpoint.
 
+FlagOS currently requires a ZIP of at most 10 MB containing UTF-8 `.py` files.
+The generic file is `[Kernel Name].py`; a chip-specific override is
+`[Kernel Name]_[chip-id].py`. The current submission page documents `_iluvatar`,
+`_metax`, `_enflame`, `_hygon`, `_kunlunxin`, and `_ascend`; international chips
+A/B use the generic file unless that task's official page says otherwise.
+Include only overrides for chips supported by that task, and freeze the exact
+ZIP member list in its adapter. The batch overview and a task's submission page
+may show different quota values. Reconcile them immediately before upload and
+stop if the selected task's remaining quota cannot be established.
+
 The checkpoint manager is evidence validation and resume support. Chrome,
 KernelGen, reviewers, local validators, and FlagOS remain distinct oracles;
 never synthesize their evidence or claim one proves another.

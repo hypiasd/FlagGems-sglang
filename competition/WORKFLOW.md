@@ -133,6 +133,21 @@ The complete candidate sequence is:
 
 ## Upload recovery and stop conditions
 
+FlagOS's submission page requires a ZIP no larger than 10 MB containing UTF-8
+`.py` files. Include the task's generic `[Kernel Name].py`; a chip override uses
+`[Kernel Name]_[chip-id].py`. The currently documented chip suffixes are
+`_iluvatar`, `_metax`, `_enflame`, `_hygon`, `_kunlunxin`, and `_ascend`.
+International chips A/B use the generic file unless that task's official page
+specifies otherwise. For each task, include overrides only for chips listed on
+that task's own official page, and keep the exact package member list in its
+adapter.
+
+The batch overview and task submission page can expose different quota values
+(for example, an overview count alongside `0/0` on an unbound task page). Before
+upload, reconcile the selected task's submission-page quota with the current
+team overview. Any unresolved discrepancy is a named preflight blocker; do not
+infer that one screen's quota applies to another task.
+
 `upload_armed` is a durable one-shot checkpoint. If the task is interrupted
 there or later, first inspect the submission records in Chrome. Never click
 Submit again or replay an archive based only on a timeout. If a fresh record
