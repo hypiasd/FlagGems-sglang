@@ -1,0 +1,119 @@
+{
+  "date": "2026-10-01",
+  "evidence_class": "gpu-experiment-nontarget",
+  "unit_tests": 30,
+  "task60_cpu_cases": 132,
+  "t4_full_matrix": {
+    "run_id": "20260930T171958-d45b5cc0",
+    "snapshot_sha256": "cc1aeb168f2bfa149094da8e5415cc76744a439ed46dbd50610c344c07a7676b",
+    "passed": 1407,
+    "total": 1407,
+    "full_matrix_passed": true
+  },
+  "quick_runs": [
+    {
+      "run_id": "20260930T173344-27b683eb",
+      "status": "passed",
+      "snapshot_sha256": "8e6eb8bff69368022c4e893b006266857da8b0b24ea4b61ec2541c25b2c0bccd",
+      "protocol_sha256": "aef924b85075e1ef55c5f516340d2f4c787c7a13d4661dc62c3c6245ffc1e6c9",
+      "timing": {
+        "initialization_seconds": 2.3178221759990265,
+        "prepare_and_compile_seconds": 1.3463473819992942,
+        "bench_wall_seconds": 0.33662735300094937,
+        "budget_overrun_seconds": 0.0,
+        "worker_wall_seconds": 4.1007590890003485
+      },
+      "compile_cache": {
+        "files_before": 6700,
+        "files_after": 6700
+      },
+      "transport": {
+        "upload_seconds": 12.50616304203868,
+        "remote_seconds": 5.693716541863978,
+        "exit_code": 0
+      },
+      "budget_seconds": 30.0,
+      "full_matrix_passed": false
+    },
+    {
+      "run_id": "20260930T173344-8eba4270",
+      "status": "passed",
+      "snapshot_sha256": "8e6eb8bff69368022c4e893b006266857da8b0b24ea4b61ec2541c25b2c0bccd",
+      "protocol_sha256": "aef924b85075e1ef55c5f516340d2f4c787c7a13d4661dc62c3c6245ffc1e6c9",
+      "timing": {
+        "initialization_seconds": 2.283999950999714,
+        "prepare_and_compile_seconds": 1.3226729250000062,
+        "bench_wall_seconds": 0.3350940239997726,
+        "budget_overrun_seconds": 0.0,
+        "worker_wall_seconds": 4.035513771999831
+      },
+      "compile_cache": {
+        "files_before": 6700,
+        "files_after": 6700
+      },
+      "transport": {
+        "upload_seconds": 6.165743542835116,
+        "remote_seconds": 5.6010794173926115,
+        "exit_code": 0
+      },
+      "budget_seconds": 30.0,
+      "full_matrix_passed": false
+    }
+  ],
+  "profiles": [
+    {
+      "run_id": "20260930T172514-055a13f3",
+      "tool": "ncu",
+      "status": "failed",
+      "metric_scope": null,
+      "capture_permission": "not_verified",
+      "hardware_counters": null,
+      "artifact": null
+    },
+    {
+      "run_id": "20260930T172514-055a13f3",
+      "tool": "nsys",
+      "status": "passed",
+      "metric_scope": null,
+      "capture_permission": "verified",
+      "hardware_counters": null,
+      "artifact": "capture.nsys-rep"
+    },
+    {
+      "run_id": "20260930T172803-10c4f65f",
+      "tool": "ncu",
+      "status": "failed",
+      "metric_scope": "launch",
+      "capture_permission": "not_verified",
+      "hardware_counters": "not_requested",
+      "artifact": null
+    }
+  ],
+  "edge_cases": {
+    "negative": "20260930T173536-287f86d4",
+    "unsupported": "20260930T173536-c0624abd",
+    "valid": "20260930T173536-aea3655b"
+  },
+  "adaptation": {
+    "adaptation_id": "adapt-6442164bec45",
+    "package_check_exit": 0,
+    "full_check_exit": 1,
+    "package": {
+      "passed": true,
+      "errors": [],
+      "archive_sha256": "d0aee9e1304a5cff56f8e1e439f15deea726f0169c709d5fbae10852cd445ed3"
+    }
+  },
+  "migration": {
+    "tracked": 114,
+    "local": 788,
+    "hashes_verified": 902
+  },
+  "official_history_records_verified": 25,
+  "ncu_limitation": {
+    "error": "ERR_NVGPUCTRPERM",
+    "cap_sys_admin": false,
+    "rm_profiling_admin_only": true,
+    "user_decision": "暂时不能，保留权限受限记录"
+  }
+}
