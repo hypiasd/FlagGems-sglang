@@ -1,7 +1,5 @@
 # Task 78 第 6 批：官方成绩账本
 
-现行查询：`python -m competition.adaptation report --task task78`；完整历史审计：`python -m competition.task78.official_history verify`。历史 ZIP 按 [迁移清单](../archive/migration.json) 解析，旧生成命令见 [归档](../archive/README.md)。
-
 共 25 条官方流水。**全芯片有效总分最佳**：v12 1.27×（8/8）。
 单芯片成绩按该芯片单独通过的官方结果统计，即便整包未达 8/8 也保留；它不构成有效整题平均分。
 

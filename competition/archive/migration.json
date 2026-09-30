@@ -1,0 +1,691 @@
+{
+  "schema_version": 1,
+  "source_commit": "ab800a8e8363c3a336451cdc530e983db1c54d7a",
+  "tracked": [
+    {
+      "old_path": ".agents/skills/flagos-s2-autopilot/SKILL.md",
+      "archive_path": "competition/archive/legacy/.agents/skills/flagos-s2-autopilot/SKILL.md",
+      "sha256": "7a38eb43594f332e0a1488f48a834166957bd68723898c624e0f06ff7e067faf",
+      "bytes": 5518
+    },
+    {
+      "old_path": ".agents/skills/kernelgen-flagos/LICENSE.txt",
+      "archive_path": "competition/archive/legacy/.agents/skills/kernelgen-flagos/LICENSE.txt",
+      "sha256": "fd1cb8528ceb9aca4db0ea2088f784df8c17b2f92ab97929c2812792bf3b9d97",
+      "bytes": 11262
+    },
+    {
+      "old_path": ".agents/skills/kernelgen-flagos/README.md",
+      "archive_path": "competition/archive/legacy/.agents/skills/kernelgen-flagos/README.md",
+      "sha256": "2e0513b667527059c20eb320dbbe760c6499fb2508f5b9c1da1d9da831cf1363",
+      "bytes": 10943
+    },
+    {
+      "old_path": ".agents/skills/kernelgen-flagos/README_zh.md",
+      "archive_path": "competition/archive/legacy/.agents/skills/kernelgen-flagos/README_zh.md",
+      "sha256": "24332372efb55149384c20fd3238f4678124b1ceeb5a078453785be6806fb011",
+      "bytes": 10321
+    },
+    {
+      "old_path": ".agents/skills/kernelgen-flagos/SKILL.md",
+      "archive_path": "competition/archive/legacy/.agents/skills/kernelgen-flagos/SKILL.md",
+      "sha256": "8fc745864f59d01e5abba10ffac6f67896282c8039d9b002a6517bb964a74abf",
+      "bytes": 12114
+    },
+    {
+      "old_path": ".agents/skills/kernelgen-flagos/kernelgen-generate-for-flaggems.md",
+      "archive_path": "competition/archive/legacy/.agents/skills/kernelgen-flagos/kernelgen-generate-for-flaggems.md",
+      "sha256": "c157f0f1d545edf9bb56534a2210d571c30ccd3d77d8418da8a33f3cf968cd4c",
+      "bytes": 49921
+    },
+    {
+      "old_path": ".agents/skills/kernelgen-flagos/kernelgen-generate-for-vllm.md",
+      "archive_path": "competition/archive/legacy/.agents/skills/kernelgen-flagos/kernelgen-generate-for-vllm.md",
+      "sha256": "c7ca5a6adadf9d8c6d2a8959fe592d08f96c35abe319d24675ef637ff4dcb065",
+      "bytes": 47983
+    },
+    {
+      "old_path": ".agents/skills/kernelgen-flagos/kernelgen-generate.md",
+      "archive_path": "competition/archive/legacy/.agents/skills/kernelgen-flagos/kernelgen-generate.md",
+      "sha256": "8dd7d95bda68d4a83eeb77e2b73bb3ed7ff7e497fcea4e81ad31d1d6b284c316",
+      "bytes": 50760
+    },
+    {
+      "old_path": ".agents/skills/kernelgen-flagos/kernelgen-mcp-setup.md",
+      "archive_path": "competition/archive/legacy/.agents/skills/kernelgen-flagos/kernelgen-mcp-setup.md",
+      "sha256": "dac863a15c9756555193f660e65dfdb0e4acaef5cbf7fb84a28616484e79b955",
+      "bytes": 5138
+    },
+    {
+      "old_path": ".agents/skills/kernelgen-flagos/kernelgen-optimize-for-flaggems.md",
+      "archive_path": "competition/archive/legacy/.agents/skills/kernelgen-flagos/kernelgen-optimize-for-flaggems.md",
+      "sha256": "dcd7eef65325473a7b91295f408d16b46ba6396b4e9d60f080795726336b5ee8",
+      "bytes": 30246
+    },
+    {
+      "old_path": ".agents/skills/kernelgen-flagos/kernelgen-optimize-for-vllm.md",
+      "archive_path": "competition/archive/legacy/.agents/skills/kernelgen-flagos/kernelgen-optimize-for-vllm.md",
+      "sha256": "85fb2f6aa8e2aaeedf194c845d944ae7efe3254bf2088a8fc98308fdce6e937c",
+      "bytes": 35509
+    },
+    {
+      "old_path": ".agents/skills/kernelgen-flagos/kernelgen-optimize.md",
+      "archive_path": "competition/archive/legacy/.agents/skills/kernelgen-flagos/kernelgen-optimize.md",
+      "sha256": "d8dd5c37257022824ddb7094e8ec7af9c655164586bcec13e56ab119ce972909",
+      "bytes": 6539
+    },
+    {
+      "old_path": ".agents/skills/kernelgen-flagos/kernelgen-specialize-for-flaggems.md",
+      "archive_path": "competition/archive/legacy/.agents/skills/kernelgen-flagos/kernelgen-specialize-for-flaggems.md",
+      "sha256": "8bfaff66f620ae6c90aca6b6645bd64e64d025146a2dd83e24afb8ebd1153b94",
+      "bytes": 19340
+    },
+    {
+      "old_path": ".agents/skills/kernelgen-flagos/kernelgen-specialize.md",
+      "archive_path": "competition/archive/legacy/.agents/skills/kernelgen-flagos/kernelgen-specialize.md",
+      "sha256": "5f157f13ba4aa6dbe03b984f4bab413a7386369b86540919b204dc31b274c2e6",
+      "bytes": 18556
+    },
+    {
+      "old_path": ".agents/skills/kernelgen-flagos/kernelgen-submit-feedback.md",
+      "archive_path": "competition/archive/legacy/.agents/skills/kernelgen-flagos/kernelgen-submit-feedback.md",
+      "sha256": "41d792b8598f4b3d20b3c150547e426d752072a0cc9dc08ff05df246228540a5",
+      "bytes": 12174
+    },
+    {
+      "old_path": ".agents/skills/kernelgen-flagos/references/reliability-gates.md",
+      "archive_path": "competition/archive/legacy/.agents/skills/kernelgen-flagos/references/reliability-gates.md",
+      "sha256": "0ffde753c0618f44d6ab546679d93ebbbc85dff4eab88a5d65e21fa171215472",
+      "bytes": 15659
+    },
+    {
+      "old_path": ".agents/skills/kernelgen-flagos/references/reviewer-protocol.md",
+      "archive_path": "competition/archive/legacy/.agents/skills/kernelgen-flagos/references/reviewer-protocol.md",
+      "sha256": "9ce53f148cb1dc2551e2562dcce1d127d821f51dde8ff23d03a18ee0a7357ae9",
+      "bytes": 4276
+    },
+    {
+      "old_path": ".agents/skills/kernelgen-flagos/references/run-record.md",
+      "archive_path": "competition/archive/legacy/.agents/skills/kernelgen-flagos/references/run-record.md",
+      "sha256": "7ef0fd29fc3195021ce2a4ce603757745a6658a258d970849cc7caa0525a39fe",
+      "bytes": 2430
+    },
+    {
+      "old_path": ".agents/skills/kernelgen-flagos/references/target-evidence.md",
+      "archive_path": "competition/archive/legacy/.agents/skills/kernelgen-flagos/references/target-evidence.md",
+      "sha256": "4253308c34230421cd8da5a13a5e4fd7aba36032d23b8d7253636d6b48dc858d",
+      "bytes": 6953
+    },
+    {
+      "old_path": ".agents/skills/kernelgen-flagos/scripts/kernelgen_gate.py",
+      "archive_path": "competition/archive/legacy/.agents/skills/kernelgen-flagos/scripts/kernelgen_gate.py",
+      "sha256": "e87349f3eb1864a341f81abef9610b19c3ca2b96f3af26e060dc780a3821b3e5",
+      "bytes": 27123
+    },
+    {
+      "old_path": ".agents/skills/kernelgen-flagos/scripts/reviewer_protocol.py",
+      "archive_path": "competition/archive/legacy/.agents/skills/kernelgen-flagos/scripts/reviewer_protocol.py",
+      "sha256": "35ef7c89c02273d06f40998ae611efe8f838d96587d592eb7e80b5dfd48bfddf",
+      "bytes": 9269
+    },
+    {
+      "old_path": ".agents/skills/kernelgen-flagos/scripts/test_kernelgen_gate.py",
+      "archive_path": "competition/archive/legacy/.agents/skills/kernelgen-flagos/scripts/test_kernelgen_gate.py",
+      "sha256": "d11bf5a56e50a0f554b0d4c379303fb2348e1a6011a4a0834365ca8cbbffc17b",
+      "bytes": 11631
+    },
+    {
+      "old_path": ".agents/skills/task78-kernelgen/SKILL.md",
+      "archive_path": "competition/archive/legacy/.agents/skills/task78-kernelgen/SKILL.md",
+      "sha256": "9c081043f24a35e22783fb67f5d8c264ef355cc077c790f70c64fe879ee3f165",
+      "bytes": 1337
+    },
+    {
+      "old_path": "competition/WORKFLOW.md",
+      "archive_path": "competition/archive/legacy/competition/WORKFLOW.md",
+      "sha256": "814ccfd34ebe66a3def21975fa5f455b4f439a8a988eb439badfeac3cdcbf624",
+      "bytes": 14999
+    },
+    {
+      "old_path": "competition/flagos_s2_workflow.py",
+      "archive_path": "competition/archive/legacy/competition/flagos_s2_workflow.py",
+      "sha256": "d8add66cee26b28b9fdbe54a1b3f22823a68cb14b0f4de71ef88062d2fef0f0d",
+      "bytes": 74528
+    },
+    {
+      "old_path": "competition/task103/README.md",
+      "archive_path": "competition/archive/legacy/competition/task103/README.md",
+      "sha256": "8ec0cf840ef7faad491a543ffff226e61b057ad0864eceef749116efef7ee087",
+      "bytes": 284
+    },
+    {
+      "old_path": "competition/task60/README.md",
+      "archive_path": "competition/archive/legacy/competition/task60/README.md",
+      "sha256": "1f7c014b43de49db7602bec5c97e32113bd9f2abb074821eb17c38935770d913",
+      "bytes": 1310
+    },
+    {
+      "old_path": "competition/task60/clamp_position.py",
+      "archive_path": "competition/archive/legacy/competition/task60/clamp_position.py",
+      "sha256": "63b1eeeafe0c0661d1e5a2aebbff763246c8104687e6074f612d45b04b8cd052",
+      "bytes": 6213
+    },
+    {
+      "old_path": "competition/task60/kernelgen/README.md",
+      "archive_path": "competition/archive/legacy/competition/task60/kernelgen/README.md",
+      "sha256": "7ff349729dce7b9ffb1d7babc1f876aad31d46e9758af234af749e323bbc9cac",
+      "bytes": 2387
+    },
+    {
+      "old_path": "competition/task60/results.jsonl",
+      "archive_path": "competition/archive/legacy/competition/task60/results.jsonl",
+      "sha256": "c17f70928a380b3adf30a09fd124e6c526bf3b627ffb6053677d81fe3a997218",
+      "bytes": 2020
+    },
+    {
+      "old_path": "competition/task60/results.md",
+      "archive_path": "competition/archive/legacy/competition/task60/results.md",
+      "sha256": "12bf3ce451ad451bd491b8a1c15b2799f7a7d17d64addca901ce3e9c677959f1",
+      "bytes": 1043
+    },
+    {
+      "old_path": "competition/task60/validate_cpu.py",
+      "archive_path": "competition/archive/legacy/competition/task60/validate_cpu.py",
+      "sha256": "7bdff909eb86cd2fe5b2149b9d7db88ecd1668e0f2540ef58a4e7aa4720c2b25",
+      "bytes": 6197
+    },
+    {
+      "old_path": "competition/task78/README.md",
+      "archive_path": "competition/archive/legacy/competition/task78/README.md",
+      "sha256": "084532386d8e481331b56302de402cdb791ad3d5bb75918eb7eeeb0719d786c4",
+      "bytes": 5354
+    },
+    {
+      "old_path": "competition/task78/concat_and_cast_mha_k.py",
+      "archive_path": "competition/archive/legacy/competition/task78/concat_and_cast_mha_k.py",
+      "sha256": "c268a0ae4dc6970e38586f3272e26f9e46058f275418831e232c951b52f8980d",
+      "bytes": 2841
+    },
+    {
+      "old_path": "competition/task78/concat_and_cast_mha_k_ascend.py",
+      "archive_path": "competition/archive/legacy/competition/task78/concat_and_cast_mha_k_ascend.py",
+      "sha256": "0846663e360cd6c265a2f9e5f37b763f7afd8cbcf5be4588ba897717b407beb9",
+      "bytes": 3788
+    },
+    {
+      "old_path": "competition/task78/concat_and_cast_mha_k_enflame.py",
+      "archive_path": "competition/archive/legacy/competition/task78/concat_and_cast_mha_k_enflame.py",
+      "sha256": "58673fba5dd8aabffd5501fc1a8131bb6933e7648fe4f42fa130658a36cf269e",
+      "bytes": 2941
+    },
+    {
+      "old_path": "competition/task78/concat_and_cast_mha_k_hygon.py",
+      "archive_path": "competition/archive/legacy/competition/task78/concat_and_cast_mha_k_hygon.py",
+      "sha256": "2680ec5c62feeebfdda5a9045eb80744b8e5cf03bd638ce82076d7595c7042a6",
+      "bytes": 2829
+    },
+    {
+      "old_path": "competition/task78/concat_and_cast_mha_k_iluvatar.py",
+      "archive_path": "competition/archive/legacy/competition/task78/concat_and_cast_mha_k_iluvatar.py",
+      "sha256": "7e95aaa5a2ac2fcda85c54f6eae9dca04f0feb1ec3d1e63cb1a8a66bcb851755",
+      "bytes": 2832
+    },
+    {
+      "old_path": "competition/task78/concat_and_cast_mha_k_kunlunxin.py",
+      "archive_path": "competition/archive/legacy/competition/task78/concat_and_cast_mha_k_kunlunxin.py",
+      "sha256": "7d8f1aadae0a60ec36a571e59924fdca56ac3891504d76e58e77c69aa4e6322e",
+      "bytes": 2943
+    },
+    {
+      "old_path": "competition/task78/concat_and_cast_mha_k_metax.py",
+      "archive_path": "competition/archive/legacy/competition/task78/concat_and_cast_mha_k_metax.py",
+      "sha256": "1c362d1b08f250b7bd28c16ec673b8cf0884cf2183ef1f8dca04007771e9ae25",
+      "bytes": 2829
+    },
+    {
+      "old_path": "competition/task78/flagos-task78-v10.zip",
+      "archive_path": "competition/archive/legacy/competition/task78/flagos-task78-v10.zip",
+      "sha256": "f59555620fe1aa5500c72def6a5b50e8ea08b1719a258d48ddfb3287fa79fe26",
+      "bytes": 12666
+    },
+    {
+      "old_path": "competition/task78/flagos-task78-v11.zip",
+      "archive_path": "competition/archive/legacy/competition/task78/flagos-task78-v11.zip",
+      "sha256": "1c3c554c419b0d0e05915e40b76e0b1e204110dec2f98e2467deb893f844faa6",
+      "bytes": 13125
+    },
+    {
+      "old_path": "competition/task78/flagos-task78-v12.zip",
+      "archive_path": "competition/archive/legacy/competition/task78/flagos-task78-v12.zip",
+      "sha256": "4eabc1dac1f58af1334c5928d086b0ef11686c787dfae2c62dd0f01f75e33f8e",
+      "bytes": 13273
+    },
+    {
+      "old_path": "competition/task78/flagos-task78-v13.zip",
+      "archive_path": "competition/archive/legacy/competition/task78/flagos-task78-v13.zip",
+      "sha256": "d61ed9e2db2d9ddfc884d78715cdc4edf34cf074ac61569b9b0e44fcd847167e",
+      "bytes": 14279
+    },
+    {
+      "old_path": "competition/task78/flagos-task78-v14.zip",
+      "archive_path": "competition/archive/legacy/competition/task78/flagos-task78-v14.zip",
+      "sha256": "aa8280e25a63042f6c486dc5fd8001bfec3b0c2dbc0b601db18d84a031604e53",
+      "bytes": 14049
+    },
+    {
+      "old_path": "competition/task78/flagos-task78-v15.zip",
+      "archive_path": "competition/archive/legacy/competition/task78/flagos-task78-v15.zip",
+      "sha256": "1317e068ed6b9a2eef626e2a665b768262338b8c29c33f933cb95dfd97d55c2c",
+      "bytes": 15729
+    },
+    {
+      "old_path": "competition/task78/flagos-task78-v16.zip",
+      "archive_path": "competition/archive/legacy/competition/task78/flagos-task78-v16.zip",
+      "sha256": "a51c3d45a5cb4b0c1c59e1e0ef1acacf294daac41abdb945c5d0a4adb205c802",
+      "bytes": 16965
+    },
+    {
+      "old_path": "competition/task78/flagos-task78-v17.zip",
+      "archive_path": "competition/archive/legacy/competition/task78/flagos-task78-v17.zip",
+      "sha256": "52d409a04b197e380844f97be904c460361a380e6731992b6a0e38a2d81da0d0",
+      "bytes": 18710
+    },
+    {
+      "old_path": "competition/task78/flagos-task78-v18.zip",
+      "archive_path": "competition/archive/legacy/competition/task78/flagos-task78-v18.zip",
+      "sha256": "da589d5562aa1f02bc72231d74b32f12476b9ccb1a44053e51111aa96ed1488f",
+      "bytes": 8818
+    },
+    {
+      "old_path": "competition/task78/flagos-task78-v19.zip",
+      "archive_path": "competition/archive/legacy/competition/task78/flagos-task78-v19.zip",
+      "sha256": "bfb8978bb88a5232e62af4f0e6dd1783e2dbc7e644a33214a7caa81cc6668e5f",
+      "bytes": 9281
+    },
+    {
+      "old_path": "competition/task78/flagos-task78-v2.zip",
+      "archive_path": "competition/archive/legacy/competition/task78/flagos-task78-v2.zip",
+      "sha256": "5c9c32b53cde99702eae759eb56d30aaa407b4c4ff252ab31b2b0ded9a5e3cde",
+      "bytes": 1445
+    },
+    {
+      "old_path": "competition/task78/flagos-task78-v21.zip",
+      "archive_path": "competition/archive/legacy/competition/task78/flagos-task78-v21.zip",
+      "sha256": "21b3c506323ae58d30cd8b5cd134f47a052d67be42c23022e7edbd18e5f53d2d",
+      "bytes": 11051
+    },
+    {
+      "old_path": "competition/task78/flagos-task78-v22.zip",
+      "archive_path": "competition/archive/legacy/competition/task78/flagos-task78-v22.zip",
+      "sha256": "0784b38e6a9af43c25c50fed2b83ca297dc28b67f2eb3e7c52bb542be8fb7eac",
+      "bytes": 12808
+    },
+    {
+      "old_path": "competition/task78/flagos-task78-v23.zip",
+      "archive_path": "competition/archive/legacy/competition/task78/flagos-task78-v23.zip",
+      "sha256": "e527dd7f9e634956bbf0964ef6ba66ee4deab031f2ca4f2f05053b3365c6f43e",
+      "bytes": 13384
+    },
+    {
+      "old_path": "competition/task78/flagos-task78-v24.zip",
+      "archive_path": "competition/archive/legacy/competition/task78/flagos-task78-v24.zip",
+      "sha256": "2a7ade45d995e74086ddd9f43e77f1a8bc485b2bf515bb15c19d9132f961919b",
+      "bytes": 8064
+    },
+    {
+      "old_path": "competition/task78/flagos-task78-v3.zip",
+      "archive_path": "competition/archive/legacy/competition/task78/flagos-task78-v3.zip",
+      "sha256": "32d039a134713c82518064d894783c28d52ba3e4ec1217f1b64631177b70901a",
+      "bytes": 2650
+    },
+    {
+      "old_path": "competition/task78/flagos-task78-v4.zip",
+      "archive_path": "competition/archive/legacy/competition/task78/flagos-task78-v4.zip",
+      "sha256": "97b7a4d098049f9e5278a3dd6b2e93de2a0a7e0951e3c6aa8c5b65f7ef940e20",
+      "bytes": 2348
+    },
+    {
+      "old_path": "competition/task78/flagos-task78-v5.zip",
+      "archive_path": "competition/archive/legacy/competition/task78/flagos-task78-v5.zip",
+      "sha256": "fa47e6b4b3cd7175e6a647b11c4797729b924766c1fbbe982ee7dc037d1cd1f3",
+      "bytes": 2487
+    },
+    {
+      "old_path": "competition/task78/flagos-task78-v6.zip",
+      "archive_path": "competition/archive/legacy/competition/task78/flagos-task78-v6.zip",
+      "sha256": "78a4762a7de1e688a8e737c031766435a1d0c61ee4540faadcc7ab9ae15aa54c",
+      "bytes": 2861
+    },
+    {
+      "old_path": "competition/task78/flagos-task78-v7.zip",
+      "archive_path": "competition/archive/legacy/competition/task78/flagos-task78-v7.zip",
+      "sha256": "98518a4057bdf52f073bd0f62cc68e7127b58a22d3540666d6285b724e08ea17",
+      "bytes": 2892
+    },
+    {
+      "old_path": "competition/task78/flagos-task78-v8.zip",
+      "archive_path": "competition/archive/legacy/competition/task78/flagos-task78-v8.zip",
+      "sha256": "ff584f6769dea9ed3f8e20b486e30fca8be352562e57e247c92609908a041970",
+      "bytes": 12448
+    },
+    {
+      "old_path": "competition/task78/flagos-task78-v9.zip",
+      "archive_path": "competition/archive/legacy/competition/task78/flagos-task78-v9.zip",
+      "sha256": "6ae3cf1d62b90c2f08d06cd63dd114953ac4f17fb2013946835ef1afdd2454f9",
+      "bytes": 12725
+    },
+    {
+      "old_path": "competition/task78/kernelgen/README.md",
+      "archive_path": "competition/archive/legacy/competition/task78/kernelgen/README.md",
+      "sha256": "7972163c99d02ab6bca0cf5d7e3ccb9369715bb708413ba718de193029339df9",
+      "bytes": 21469
+    },
+    {
+      "old_path": "competition/task78/kernelgen/check_structural_delta.py",
+      "archive_path": "competition/archive/legacy/competition/task78/kernelgen/check_structural_delta.py",
+      "sha256": "378a20e3eb669e2f726da33ceea9755bf0fe2575d0e46ce36735de51533718bb",
+      "bytes": 7309
+    },
+    {
+      "old_path": "competition/task78/kernelgen/gpu_smoke.py",
+      "archive_path": "competition/archive/legacy/competition/task78/kernelgen/gpu_smoke.py",
+      "sha256": "028458cca3edeeb5b94c4120ef805ad94846c56ec98a04ebc7f2af06a8b65c59",
+      "bytes": 12565
+    },
+    {
+      "old_path": "competition/task78/kernelgen/gpu_smoke_remote.py",
+      "archive_path": "competition/archive/legacy/competition/task78/kernelgen/gpu_smoke_remote.py",
+      "sha256": "7232af2b2fd7ae4cfe832704dd7e0db5d46f75365508c90db21d2e58cf847c11",
+      "bytes": 15441
+    },
+    {
+      "old_path": "competition/task78/kernelgen/mcp.json.example",
+      "archive_path": "competition/archive/legacy/competition/task78/kernelgen/mcp.json.example",
+      "sha256": "5319d20c1db168c421686622b565f40d72c42d83c2826fb3713ca20eb5074b48",
+      "bytes": 208
+    },
+    {
+      "old_path": "competition/task78/kernelgen/optimization-manifest.example.json",
+      "archive_path": "competition/archive/legacy/competition/task78/kernelgen/optimization-manifest.example.json",
+      "sha256": "3be65de080ccd6a358ca9d348b16b5d25b59cc417ff3b0b11b2bb248bee1891a",
+      "bytes": 6369
+    },
+    {
+      "old_path": "competition/task78/kernelgen/prepare_mixed_candidate.py",
+      "archive_path": "competition/archive/legacy/competition/task78/kernelgen/prepare_mixed_candidate.py",
+      "sha256": "1733e97aca8c8efc5615b2c85e9dcfd95910e53d09a4e3aa4e40baf0651ed690",
+      "bytes": 7285
+    },
+    {
+      "old_path": "competition/task78/kernelgen/review_candidate.py",
+      "archive_path": "competition/archive/legacy/competition/task78/kernelgen/review_candidate.py",
+      "sha256": "087fe8e6ff648adb70a98d55ea262ddac5d2a089b99f577471fe4e65856de399",
+      "bytes": 26985
+    },
+    {
+      "old_path": "competition/task78/kernelgen/reviewer-holdout-experiments.md",
+      "archive_path": "competition/archive/legacy/competition/task78/kernelgen/reviewer-holdout-experiments.md",
+      "sha256": "a039520f9e75aedb0f0a814d450d4a17e14714263c936b59db9ef41d4df9e3f1",
+      "bytes": 7014
+    },
+    {
+      "old_path": "competition/task78/kernelgen/run_candidate_gate.py",
+      "archive_path": "competition/archive/legacy/competition/task78/kernelgen/run_candidate_gate.py",
+      "sha256": "b18a39c708e0a2112ce91035880bba933374ccddf3d406eb5a292f2d55618b5e",
+      "bytes": 14121
+    },
+    {
+      "old_path": "competition/task78/kernelgen/subagent_review_prompt.md",
+      "archive_path": "competition/archive/legacy/competition/task78/kernelgen/subagent_review_prompt.md",
+      "sha256": "4c2a9e080107d45aacb6f861fd17ba4a5586b916ef0a221c8b4b0ead1f2508f6",
+      "bytes": 6142
+    },
+    {
+      "old_path": "competition/task78/kernelgen/submission_hurdle.py",
+      "archive_path": "competition/archive/legacy/competition/task78/kernelgen/submission_hurdle.py",
+      "sha256": "72556c4f66a280d8ff83d7f43885022435df50187629296c96427ee92f490ae6",
+      "bytes": 6775
+    },
+    {
+      "old_path": "competition/task78/kernelgen/task78_results.py",
+      "archive_path": "competition/archive/legacy/competition/task78/kernelgen/task78_results.py",
+      "sha256": "81b415309153a6c476abd6d591aaa56f3e9c896a4ec08b3b09fc5c03d5e762c9",
+      "bytes": 14666
+    },
+    {
+      "old_path": "competition/task78/kernelgen/test_gpu_smoke.py",
+      "archive_path": "competition/archive/legacy/competition/task78/kernelgen/test_gpu_smoke.py",
+      "sha256": "5ea75d444f87a682802ed3c02a63c8c1572e1a1ab42e4ac05851aaccc8d097ae",
+      "bytes": 12170
+    },
+    {
+      "old_path": "competition/task78/kernelgen/test_package_validation.py",
+      "archive_path": "competition/archive/legacy/competition/task78/kernelgen/test_package_validation.py",
+      "sha256": "47119215af090107f3d02dcf57a84b3004b555327daf415b3bbf55fbc7530152",
+      "bytes": 2250
+    },
+    {
+      "old_path": "competition/task78/kernelgen/test_prepare_mixed_candidate.py",
+      "archive_path": "competition/archive/legacy/competition/task78/kernelgen/test_prepare_mixed_candidate.py",
+      "sha256": "706fa6b6a9d34aa7733fb6c7227a513b18c04187730af01d1426ecfbf0521cac",
+      "bytes": 793
+    },
+    {
+      "old_path": "competition/task78/kernelgen/test_results_ledger.py",
+      "archive_path": "competition/archive/legacy/competition/task78/kernelgen/test_results_ledger.py",
+      "sha256": "9a981667c1ca2b7f403850355fd25c74fe7fa041133b8b3aeef7965cd5f4a0ca",
+      "bytes": 2779
+    },
+    {
+      "old_path": "competition/task78/kernelgen/test_review_candidate_regressions.py",
+      "archive_path": "competition/archive/legacy/competition/task78/kernelgen/test_review_candidate_regressions.py",
+      "sha256": "b47c9359f1f9a9467232e231e57d4e35aa6f5900e7acd3ce6a58f38e06dacf0e",
+      "bytes": 15443
+    },
+    {
+      "old_path": "competition/task78/kernelgen/test_structural_delta.py",
+      "archive_path": "competition/archive/legacy/competition/task78/kernelgen/test_structural_delta.py",
+      "sha256": "637eae61aba98e073b11c71f37d6e2a4c7866fcb45fad1d70cd475059afa55bf",
+      "bytes": 3013
+    },
+    {
+      "old_path": "competition/task78/kernelgen/test_submission_hurdle.py",
+      "archive_path": "competition/archive/legacy/competition/task78/kernelgen/test_submission_hurdle.py",
+      "sha256": "522d7089a309fa064a1f7b4a1433635fc45a63f5126ad61280ee70895dd0b5b5",
+      "bytes": 3740
+    },
+    {
+      "old_path": "competition/task78/kernelgen/validate_package.py",
+      "archive_path": "competition/archive/legacy/competition/task78/kernelgen/validate_package.py",
+      "sha256": "9f5d88eb9cda82ccb0c024bde3e8db8f606b01d7e28469d346cb563c90e89872",
+      "bytes": 2704
+    },
+    {
+      "old_path": "competition/task78/results.jsonl",
+      "archive_path": "competition/archive/legacy/competition/task78/results.jsonl",
+      "sha256": "cbfe5d18932af5ffac96b13ef04000a9d51edd830c214e735248e9603c8e8943",
+      "bytes": 64216
+    },
+    {
+      "old_path": "competition/task78/results.md",
+      "archive_path": "competition/archive/legacy/competition/task78/results.md",
+      "sha256": "e267ac8bcabeb41aea91813f2b1705d0316793b7691ae19a27cee85af916930f",
+      "bytes": 6866
+    },
+    {
+      "old_path": "competition/task78/v10/README.md",
+      "archive_path": "competition/archive/legacy/competition/task78/v10/README.md",
+      "sha256": "2e3ca9894cccc76c6c10a0ce79aa31e3526b6642ce40dbf46b30fbf76479519b",
+      "bytes": 1347
+    },
+    {
+      "old_path": "competition/task78/v11/README.md",
+      "archive_path": "competition/archive/legacy/competition/task78/v11/README.md",
+      "sha256": "9a1572ccd1029d6fa90644f21a3410034af09ff6435a2659ec4fdcdcdfb58c31",
+      "bytes": 1243
+    },
+    {
+      "old_path": "competition/task78/v12/README.md",
+      "archive_path": "competition/archive/legacy/competition/task78/v12/README.md",
+      "sha256": "7851b516dbc628c1183d25e4ff7433025ec6d6b6c7eedd1974a82dba1ad113c7",
+      "bytes": 1188
+    },
+    {
+      "old_path": "competition/task78/v13/README.md",
+      "archive_path": "competition/archive/legacy/competition/task78/v13/README.md",
+      "sha256": "03f1e7d99bbfb7b037df3d827179747ffa744968ce161f6f043b0b89f58d7c69",
+      "bytes": 1356
+    },
+    {
+      "old_path": "competition/task78/v14/README.md",
+      "archive_path": "competition/archive/legacy/competition/task78/v14/README.md",
+      "sha256": "938e558596c61b3aeae76eded8afa5710147e8a179512d25cb26307922825091",
+      "bytes": 1436
+    },
+    {
+      "old_path": "competition/task78/v15/README.md",
+      "archive_path": "competition/archive/legacy/competition/task78/v15/README.md",
+      "sha256": "700c8687c37a805e5b4eb4cc788c74c0a58fb29f5eda5ec7295d3742ef606708",
+      "bytes": 2499
+    },
+    {
+      "old_path": "competition/task78/v16/README.md",
+      "archive_path": "competition/archive/legacy/competition/task78/v16/README.md",
+      "sha256": "264a18cb055684684c649778c48fa3c9ba8cc4a2e62692b3c85400aef61bdc63",
+      "bytes": 2500
+    },
+    {
+      "old_path": "competition/task78/v17/README.md",
+      "archive_path": "competition/archive/legacy/competition/task78/v17/README.md",
+      "sha256": "1834f1790a4b1858e30627a2a583531d3c3305f9ee029298219d575fa84e18f9",
+      "bytes": 2701
+    },
+    {
+      "old_path": "competition/task78/v18/README.md",
+      "archive_path": "competition/archive/legacy/competition/task78/v18/README.md",
+      "sha256": "b4ca0415721643a02bedb98e06f8e52c3647476b1d7751b1fb7f8931d75f3192",
+      "bytes": 8641
+    },
+    {
+      "old_path": "competition/task78/v18/validation.md",
+      "archive_path": "competition/archive/legacy/competition/task78/v18/validation.md",
+      "sha256": "54c30d8a36d21a3aa3285edfea1a329a8e07c5bcfa117293689748e1613e7450",
+      "bytes": 1340
+    },
+    {
+      "old_path": "competition/task78/v19/README.md",
+      "archive_path": "competition/archive/legacy/competition/task78/v19/README.md",
+      "sha256": "beb6d94b8bc5c383e7fa7478b2dea5723ee2e86b69372f0b706ff0ce597b5c15",
+      "bytes": 7466
+    },
+    {
+      "old_path": "competition/task78/v19/validation.md",
+      "archive_path": "competition/archive/legacy/competition/task78/v19/validation.md",
+      "sha256": "86a5baf8854a472abaa6985f9bbfb72bf27908072ec4d4796a96353a256b5818",
+      "bytes": 2181
+    },
+    {
+      "old_path": "competition/task78/v20/README.md",
+      "archive_path": "competition/archive/legacy/competition/task78/v20/README.md",
+      "sha256": "dfda7ee7cd57110ec8a747bf7e1c1f5b07bdbea7a3c2f1674c1a36d38542f6db",
+      "bytes": 1516
+    },
+    {
+      "old_path": "competition/task78/v23/README.md",
+      "archive_path": "competition/archive/legacy/competition/task78/v23/README.md",
+      "sha256": "6c958a7d55a0ae6ef4a62a81e054666e8916d37008383475f352eb711c217338",
+      "bytes": 1671
+    },
+    {
+      "old_path": "competition/task78/v23/validation.md",
+      "archive_path": "competition/archive/legacy/competition/task78/v23/validation.md",
+      "sha256": "2605d60b92268b93450cac597adb7cfb217460287fec789ce3192ba57433c9d4",
+      "bytes": 4314
+    },
+    {
+      "old_path": "competition/task78/v24/README.md",
+      "archive_path": "competition/archive/legacy/competition/task78/v24/README.md",
+      "sha256": "add324444531ce43400e2ead4e392149310570f1b3a1e0fdaa9c040ce7ecdeb3",
+      "bytes": 2199
+    },
+    {
+      "old_path": "competition/task78/v24/validation.md",
+      "archive_path": "competition/archive/legacy/competition/task78/v24/validation.md",
+      "sha256": "2e896b942c8c817d5f46ffbcaaa853a85e911303229fa8cb8dfa793afe398952",
+      "bytes": 6351
+    },
+    {
+      "old_path": "competition/task78/v4/concat_and_cast_mha_k_ascend.py",
+      "archive_path": "competition/archive/legacy/competition/task78/v4/concat_and_cast_mha_k_ascend.py",
+      "sha256": "0cceb9d9c37d99a2ad526551d471a920baebce995dfe7b853f764f867f49cdac",
+      "bytes": 1731
+    },
+    {
+      "old_path": "competition/task78/v5/README.md",
+      "archive_path": "competition/archive/legacy/competition/task78/v5/README.md",
+      "sha256": "67fcf7e8c897dff09dce880b592fc1b9d5cdf92a70cde1864c8285bae04c2d5a",
+      "bytes": 1137
+    },
+    {
+      "old_path": "competition/task78/v5/concat_and_cast_mha_k_ascend.py",
+      "archive_path": "competition/archive/legacy/competition/task78/v5/concat_and_cast_mha_k_ascend.py",
+      "sha256": "d3c3872f34e9806c6f52954a75f4590883bb435fa8280219a56ece1cbeaca071",
+      "bytes": 2205
+    },
+    {
+      "old_path": "competition/task78/v6/README.md",
+      "archive_path": "competition/archive/legacy/competition/task78/v6/README.md",
+      "sha256": "0f85b05936c6788b6b0b716079d19725a8d12d6ae3d29fed655f6cc3799b4603",
+      "bytes": 821
+    },
+    {
+      "old_path": "competition/task78/v7/README.md",
+      "archive_path": "competition/archive/legacy/competition/task78/v7/README.md",
+      "sha256": "e1e043d3e72af3d7aadd57d8b39b22290c645af3fd282154ae94275aa899e939",
+      "bytes": 704
+    },
+    {
+      "old_path": "competition/task78/v8/README.md",
+      "archive_path": "competition/archive/legacy/competition/task78/v8/README.md",
+      "sha256": "455997b887df5901a3a44cbc0a19e8d86cf22c5751a71deb67538f58c14a252f",
+      "bytes": 804
+    },
+    {
+      "old_path": "competition/task78/v9/README.md",
+      "archive_path": "competition/archive/legacy/competition/task78/v9/README.md",
+      "sha256": "f0bd26a4db803a7b93d8438644a7c7353370194a1384fd254b769b4c003f1b45",
+      "bytes": 951
+    },
+    {
+      "old_path": "competition/task78/validate_cpu.py",
+      "archive_path": "competition/archive/legacy/competition/task78/validate_cpu.py",
+      "sha256": "4e7e89fb74c8719fac0e4451bbb0a957ef42c1674b55efe390b4267c1e6d5b9f",
+      "bytes": 36100
+    },
+    {
+      "old_path": "competition/test_flagos_s2_workflow.py",
+      "archive_path": "competition/archive/legacy/competition/test_flagos_s2_workflow.py",
+      "sha256": "dc0744aab6d9e2660bff67fc61c65d94787ac512c3feafb2f9f0fc5ccfe1a08d",
+      "bytes": 5600
+    },
+    {
+      "old_path": "competition/workflow/tasks/task60.json",
+      "archive_path": "competition/archive/legacy/competition/workflow/tasks/task60.json",
+      "sha256": "ccf59afb4d1bba6fea07a88ff05698e602f476629b90e0f8ea1c6a92867327ed",
+      "bytes": 3024
+    },
+    {
+      "old_path": "competition/workflow/tasks/task78.json",
+      "archive_path": "competition/archive/legacy/competition/workflow/tasks/task78.json",
+      "sha256": "c6a79d8a783007f2d0825151b6c8db304a2ff854ff58cd2e3a9faacfa86fd5b4",
+      "bytes": 3256
+    },
+    {
+      "old_path": "competition/workflow/tasks/template.json",
+      "archive_path": "competition/archive/legacy/competition/workflow/tasks/template.json",
+      "sha256": "ab39aca5fccf7dea11252313ad116fd899ea4a81498e9d30383fc5a771281ac4",
+      "bytes": 2102
+    }
+  ],
+  "local_manifest": "competition/.local/archive-manifest.json"
+}
