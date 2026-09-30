@@ -63,6 +63,13 @@ and the selected task's profile and adapter before generating source.
    selected tasks. System or user interruptions can still happen; resume from
    the selected queue and each task's own checkpoint.
 
+A task adapter may expose a **non-target smoke** gate (real compilation and
+execution on an accelerator that is not one of the task's declared targets).
+It can inform the local candidate decision, but it never supplies target
+evidence, never satisfies `target_validated` or `measured`, and stays advisory
+unless the user explicitly arms it. Keep its evidence labelled as non-target so
+the run record cannot be misread later.
+
 FlagOS currently requires a ZIP of at most 10 MB containing UTF-8 `.py` files.
 The generic file is `[Kernel Name].py`; a chip-specific override is
 `[Kernel Name]_[chip-id].py`. The current submission page documents `_iluvatar`,

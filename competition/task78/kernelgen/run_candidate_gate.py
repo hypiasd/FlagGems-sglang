@@ -4,6 +4,12 @@
 This gate is intentionally local-only. A PASS means the candidate satisfies
 the source contract, the CPU semantic model, and the deterministic compiler-
 risk scan; it does not prove Triton compilation or accelerator performance.
+
+An optional non-target GPU smoke report (``--gpu-smoke-json``) adds real Triton
+compilation and execution on a machine that is *not* one of the eight declared
+targets. It is advisory by default and only blocks with
+``--require-gpu-smoke``. Either way it can never satisfy ``target_validated``
+or ``measured``: the device is not a competition target.
 """
 
 from __future__ import annotations
@@ -26,6 +32,55 @@ import check_structural_delta
 
 BACKENDS = ("default", "ascend", "enflame", "hygon", "iluvatar", "kunlunxin", "metax")
 PUBLIC = "concat_and_cast_mha_k"
+GPU_SMOKE_EVIDENCE_CLASS = "nvidia-smoke-nontarget"
+
+
+def gpu_smoke_check(path: Path | None, expected_hashes: dict, require: bool) -> dict:
+    """Validate a non-target GPU smoke report and bind it to the candidate bytes.
+
+    Advisory by default. With ``require`` the caller adds this result to the
+    overall gate verdict; without it the report is recorded but cannot block.
+    Neither mode lets the smoke result act as target evidence.
+    """
+    result = {
+        "provided": path is not None,
+        "required": require,
+        "blocking": require,
+        "passed": not require,
+        "evidence_class": None,
+        "status": None,
+        "note": "non-target smoke: never satisfies target_validated or measured",
+    }
+    if path is None:
+        if require:
+            result["passed"] = False
+            result["error"] = "--require-gpu-smoke needs --gpu-smoke-json"
+        return result
+    try:
+        report = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        result.update({"passed": False, "error": f"cannot read GPU smoke report: {exc}"})
+        return result
+
+    result["evidence_class"] = report.get("evidence_class")
+    result["status"] = report.get("status")
+    problems = []
+    if report.get("evidence_class") != GPU_SMOKE_EVIDENCE_CLASS:
+        problems.append(f"evidence_class must be {GPU_SMOKE_EVIDENCE_CLASS}")
+    if report.get("status") != "pass" or report.get("passed") is not True:
+        problems.append(f"smoke status is {report.get('status')!r}")
+    if (report.get("negative_control") or {}).get("passed") is not True:
+        problems.append("negative control did not prove the checker rejects a wrong kernel")
+    expected = {source_name(backend): value for backend, value in expected_hashes.items()}
+    reported = report.get("source_hashes") or {}
+    if not expected:
+        problems.append("no candidate source hashes to bind the smoke report against")
+    elif reported != expected:
+        problems.append("GPU smoke source hashes do not match the current candidate bytes")
+    result["passed"] = not problems
+    if problems:
+        result["errors"] = problems
+    return result
 
 
 def source_name(backend: str) -> str:
@@ -104,6 +159,10 @@ def main(argv=None) -> int:
                         help="reject candidates without a passing review receipt")
     parser.add_argument("--compiler-review-json", type=Path,
                         help="save the automatic compiler-risk scan receipt")
+    parser.add_argument("--gpu-smoke-json", type=Path,
+                        help="report from gpu_smoke.py: real Triton compile/run on a non-target GPU")
+    parser.add_argument("--require-gpu-smoke", action="store_true",
+                        help="make a missing or failing non-target GPU smoke report block this gate")
     args = parser.parse_args(argv)
     source_dir = args.source_dir.resolve()
     static = []
@@ -221,12 +280,22 @@ def main(argv=None) -> int:
     if args.require_review and missing_baseline:
         review["passed"] = False
         review["error"] = "baseline source directory is incomplete"
+    gpu_smoke = gpu_smoke_check(args.gpu_smoke_json, expected_hashes, args.require_gpu_smoke)
+    if args.require_gpu_smoke:
+        print("[gpu-smoke] gate ENFORCED: a missing or failing report blocks this candidate",
+              file=sys.stderr)
+    elif args.gpu_smoke_json is not None:
+        print("[gpu-smoke] gate ADVISORY: report recorded but not blocking "
+              "(pass --require-gpu-smoke to enforce)", file=sys.stderr)
+    else:
+        print("[gpu-smoke] gate SKIPPED: no --gpu-smoke-json supplied", file=sys.stderr)
     passed = (
         static_passed
         and semantic.get("passed") is True
         and compiler_review_passed
         and review["passed"]
         and structural.get("passed") is True
+        and (gpu_smoke["passed"] or not args.require_gpu_smoke)
     )
     validator_returncode = completed.returncode if completed is not None else None
     result = {
@@ -238,9 +307,11 @@ def main(argv=None) -> int:
         "compiler_review": compiler_review,
         "review": review,
         "structural_delta": structural,
+        "gpu_smoke": gpu_smoke,
         "validator_returncode": validator_returncode,
         "compiler_review_returncode": compiler_review_completed.returncode,
-        "notice": "Local gate only; target compiler/device and performance remain unverified.",
+        "notice": ("Local gate only; target compiler/device and performance remain "
+                   "unverified. A non-target GPU smoke pass is still not target evidence."),
     }
     if args.json_path:
         args.json_path.parent.mkdir(parents=True, exist_ok=True)

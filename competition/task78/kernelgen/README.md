@@ -259,6 +259,53 @@ Use `--autotune-sweep-full` for a release audit when the candidate has
 autotuning. The CPU model checks source-level semantics and memory coverage;
 it does not compile Triton or predict any chip's score.
 
+## Non-target GPU smoke (optional, never target evidence)
+
+`gpu_smoke.py` runs the *same* case matrix, layouts, and seeded inputs as
+`validate_cpu.py` on a remote machine that has a real Triton-capable GPU, so the
+candidate goes through actual Triton compilation and kernel execution instead of
+the CPU execution model. This is the one signal the CPU model structurally
+cannot produce: compiler/launch/ABI-level failures, and execution of every
+autotune config rather than only the first.
+
+It is **not** target evidence. The device is not one of the eight declared Task
+78 targets, so a pass says nothing about any target chip, and the report is
+labelled `evidence_class: "nvidia-smoke-nontarget"`. It is wired into
+`run_candidate_gate.py` as **advisory by default**; only `--require-gpu-smoke`
+makes a missing or failing report block the candidate. Neither mode can satisfy
+`target_validated` or `measured`.
+
+```sh
+export LD_LIBRARY_PATH=/usr/local/nvidia/lib64   # remote containers often hide the driver
+python3 competition/task78/kernelgen/gpu_smoke.py \
+  --source-dir competition/task78/kernelgen/candidates/<run-id>/source \
+  --json competition/task78/kernelgen/candidates/<run-id>/gpu-smoke.json
+# then, to include it in the candidate gate:
+python3 competition/task78/kernelgen/run_candidate_gate.py \
+  ... --gpu-smoke-json .../gpu-smoke.json            # advisory
+  ... --gpu-smoke-json .../gpu-smoke.json --require-gpu-smoke   # blocking
+```
+
+Connection details and credentials live only in the git-ignored
+`competition/.autopilot/gpu-smoke.json`; the password is passed to `sshpass`
+through the environment and never appears in a command line, a log, or the
+evidence file. `gpu_smoke.py` copies the candidate sources into a scratch
+directory, copies the driver and validator *beside* that directory, and binds
+the report to the local candidate SHA-256 values, so a stale report cannot be
+reused for different bytes. Exit codes: `0` pass, `1` smoke failure,
+`2` infrastructure failure, `3` disabled or unconfigured.
+
+Known limits, all of which keep this out of the target-evidence path:
+
+- sm_75 on a T4 does not share the target backends' compilers, LLVM version,
+  memory hierarchy, or launch limits. A T4-specific failure may be a false
+  positive, and a T4 pass proves nothing about a target.
+- Device launch limits differ: T4 allows a much larger `grid.x` than Enflame's
+  `65535`, so grid-bound failures such as v24's are **not** reproducible here.
+- There is no per-element write tracking, so the CPU model's duplicate/missing
+  write coverage check has no GPU equivalent; only the final output comparison
+  applies.
+
 ## Score interpretation
 
 Keep the official raw result for every submission and a separate best-valid

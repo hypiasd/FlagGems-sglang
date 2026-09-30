@@ -168,6 +168,14 @@ record provides all target outcomes. Only an 8/8 record can
 validate all targets or yield a task-level aggregate. A failed/incomplete target
 stops promotion and creates a repair run if the evidence supports one.
 
+A task adapter may add a **non-target smoke** gate: real compilation and
+execution on an accelerator that is not one of that task's declared targets.
+Such a gate may inform the local candidate decision, but it can never satisfy
+`target_validated` or `measured`, never contributes a target result, and must
+label its evidence so the distinction survives in the run record. Only the
+official FlagOS record or a trusted complete target runner produces target
+evidence.
+
 The complete candidate sequence is:
 
 1. Read the exact task page in Chrome. Freeze public signature, reference
