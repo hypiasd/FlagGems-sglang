@@ -1,0 +1,147 @@
+"""Prepare competition adaptations; upload is handled explicitly in Chrome."""
+from __future__ import annotations
+import argparse
+import gzip
+import importlib
+import json
+import math
+import shutil
+import uuid
+import urllib.request
+from pathlib import Path
+from competition.experiments import store
+from .compiler_scan import inspect_source
+from .ledger import record, summary
+from .packaging import make_package, validate_package
+from .structure import normalized_ast
+
+
+def prepare(run_id, baseline=None):
+    root = store.run_path(run_id)
+    experiment = store.verify(root)
+    identifier = "adapt-" + uuid.uuid4().hex[:12]
+    dest = store.LOCAL / "adaptations" / identifier
+    shutil.copytree(root / "source", dest / "source")
+    shutil.copy2(root / "contract.json", dest / "contract.json")
+    if baseline:
+        (dest / "baseline").mkdir()
+        for name in store.load_json(dest / "contract.json")["package_members"]:
+            path = baseline / name
+            if path.is_symlink():
+                raise ValueError("baseline sources must be regular files")
+            if path.is_file():
+                shutil.copy2(path, dest / "baseline" / name)
+    manifest = {"adaptation_id": identifier, "task_id": experiment["task_id"], "experiment_id": run_id,
+                "experiment_snapshot_sha256": experiment["snapshot_sha256"], "status": "draft", "created_at": store.now()}
+    store.write_json(dest / "adaptation.json", manifest)
+    package = make_package(dest / "source", dest / "package.zip", store.load_json(dest / "contract.json"))
+    return {**manifest, "package": package, "next": "edit the independent source if needed; provide release.json and run check before any upload"}
+
+
+def publication_check(dest):
+    contract = store.load_json(dest / "contract.json")
+    manifest_path = dest / "release.json"
+    errors, compiler, structure = [], {}, {}
+    if not manifest_path.exists():
+        return {"passed": False, "errors": ["release.json is missing: per-target hypotheses, forecasts, reviews and full correctness evidence are required"]}
+    manifest = store.load_json(manifest_path)
+    if set(manifest.get("targets", {})) != set(contract["targets"]):
+        errors.append("release hypotheses must cover exactly this task's target matrix")
+    for target in contract["targets"]:
+        item = manifest.get("targets", {}).get(target, {})
+        name = item.get("source", "")
+        if name not in contract["package_members"]:
+            errors.append(f"{target}: invalid source member")
+            continue
+        source, baseline = dest / "source" / name, dest / "baseline" / name
+        required = ("structural_change", "expected_mechanism", "bottleneck_evidence", "falsifier")
+        if any(not item.get(key) for key in required):
+            errors.append(f"{target}: structural hypothesis is incomplete")
+        if not source.exists() or not baseline.exists():
+            errors.append(f"{target}: source/baseline snapshot missing")
+            continue
+        if item.get("source_sha256") != store.digest(source) or item.get("baseline_sha256") != store.digest(baseline):
+            errors.append(f"{target}: hypothesis hashes differ from source/baseline")
+        changed = normalized_ast(source)[0] != normalized_ast(baseline)[0]
+        structure[target] = changed
+        if not changed:
+            errors.append(f"{target}: constant/comment-only or unchanged structure")
+        scan = inspect_source(source, target if not target.startswith("intl_") else "default")
+        compiler[target] = scan["findings"]
+        if scan["blockers"]:
+            errors.append(f"{target}: unresolved compiler blockers")
+    reviews = manifest.get("reviews", [])
+    review_ids = {item.get("invocation_id") for item in reviews if item.get("invocation_id")}
+    if len(review_ids) < contract["review_policy"].get("independent_reviews", 2) or any(item.get("novel_findings") for item in reviews):
+        errors.append("independent review evidence is missing or contains unresolved findings")
+    full = manifest.get("full_correctness", {})
+    if full.get("status") != "passed" or not full.get("evidence") or full.get("source_hashes") != {p.name: store.digest(p) for p in (dest / "source").glob("*.py")}:
+        errors.append("full correctness evidence must bind every adapted source")
+    policy = contract.get("publication_policy")
+    if not policy:
+        errors.append("this task has no verified publication policy yet")
+    elif contract["task_id"] == "task78":
+        from competition.task78 import release, official_history
+        hurdle = release.evaluate(manifest, official_history.load_ledger(), official_history.ROOT)
+        errors.extend(hurdle["errors"])
+    else:
+        goal = manifest.get("frozen_goal")
+        projected = manifest.get("projected_aggregate")
+        if not manifest.get("forecast_evidence") or not all(isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) and v > 0 for v in (goal, projected)) or projected <= goal:
+            errors.append("task-specific frozen goal and evidenced forecast improvement are required")
+    return {"passed": not errors, "errors": errors, "compiler": compiler, "structural_delta": structure, "limitation": "forecasts and local validation are not official target results"}
+
+
+def inspect(task, refresh=False):
+    contract = store.profile(task)
+    result = {"task_id": task, "contract": contract}
+    if refresh:
+        url = "https://flagos.io/flagos/api/v1/races/782kzq4m/operator-tasks/" + contract["operator"]
+        with urllib.request.urlopen(url, timeout=25) as response:
+            data = response.read()
+        if data[:2] == b"\x1f\x8b":
+            data = gzip.decompress(data)
+        official = json.loads(data)["data"]
+        evidence = store.LOCAL / "contracts" / task / (store.now().replace(":", "-") + ".json")
+        store.write_json(evidence, {"source": url, "captured_at": store.now(), "data": official})
+        mapping = {"tianshu": "iluvatar", "muxi": "metax", "haiguang": "hygon", "huawei": "ascend", "card_a": "intl_a", "card_b": "intl_b"}
+        targets = [mapping.get(t, t) for t in official["supported_gpus"]]
+        result.update(official_targets=targets, contract_drift=set(targets) != set(contract["targets"]), evidence=evidence.relative_to(store.ROOT).as_posix())
+    return result
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    sub = parser.add_subparsers(dest="command", required=True)
+    p = sub.add_parser("inspect"); p.add_argument("--task", required=True); p.add_argument("--refresh", action="store_true")
+    p = sub.add_parser("prepare"); p.add_argument("--run", required=True); p.add_argument("--baseline", type=Path)
+    p = sub.add_parser("check"); p.add_argument("--adaptation", required=True); p.add_argument("--package-only", action="store_true")
+    p = sub.add_parser("record"); p.add_argument("--task", required=True); p.add_argument("--input", type=Path, required=True)
+    p = sub.add_parser("report"); p.add_argument("--task", required=True)
+    args = parser.parse_args(argv)
+    try:
+        if args.command == "inspect": result = inspect(args.task, args.refresh)
+        elif args.command == "prepare": result = prepare(args.run, args.baseline)
+        elif args.command == "record": result = record(args.task, store.load_json(args.input))
+        elif args.command == "report": result = summary(args.task)
+        else:
+            if not args.adaptation.startswith("adapt-") or not args.adaptation[6:].isalnum():
+                raise ValueError("invalid adaptation ID")
+            dest = store.LOCAL / "adaptations" / args.adaptation
+            contract = store.load_json(dest / "contract.json")
+            package = make_package(dest / "source", dest / "package.zip", contract)
+            publication = None if args.package_only else publication_check(dest)
+            result = {"package": package, "publication": publication, "passed": package["passed"] and (args.package_only or publication["passed"])}
+            manifest = store.load_json(dest / "adaptation.json")
+            manifest.update(status="package_checked" if args.package_only and result["passed"] else "ready" if result["passed"] else "blocked", package_sha256=package["archive_sha256"], source_hashes={p.name: store.digest(p) for p in (dest / "source").glob("*.py")})
+            store.write_json(dest / "adaptation.json", manifest)
+            store.write_json(dest / "check.json", result)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result.get("passed", True) else 1
+    except (ValueError, OSError, KeyError) as exc:
+        print(json.dumps({"passed": False, "error": str(exc)}, ensure_ascii=False))
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

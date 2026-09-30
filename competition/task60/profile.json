@@ -1,0 +1,54 @@
+{
+  "schema_version": 2,
+  "task_id": "task60",
+  "operator": "clamp_position",
+  "entrypoint": "clamp_position(seq_lens)",
+  "package_members": [
+    "clamp_position.py"
+  ],
+  "targets": [
+    "iluvatar",
+    "metax",
+    "enflame",
+    "hygon",
+    "kunlunxin",
+    "ascend",
+    "intl_a",
+    "intl_b"
+  ],
+  "target_labels": {
+    "iluvatar": "天数智芯",
+    "metax": "沐曦",
+    "enflame": "燧原",
+    "hygon": "海光",
+    "kunlunxin": "昆仑芯",
+    "ascend": "华为",
+    "intl_a": "国际通用 A",
+    "intl_b": "国际通用 B"
+  },
+  "contract_source": {
+    "kind": "migrated",
+    "url": "https://flagos.io/race-detail-season2?id=782kzq4m&lang=cn",
+    "verified_at": "2026-09-30",
+    "historical_profile": "competition/archive/legacy/competition/workflow/tasks/task60.json"
+  },
+  "case_coverage": "development-regression",
+  "official_cases_complete": false,
+  "hardware_requirements": {},
+  "publication_policy": {
+    "aggregate_source": "official-platform",
+    "aggregate_required_for_promotion": true,
+    "aggregate_valid_only_when_all_targets_pass": true,
+    "goal_resolution": "freeze the current task leaderboard goal in Chrome before iteration",
+    "release_floor": "strictly beat the frozen goal with all eight targets correct",
+    "anomaly_rule": "keep every observation; exclude only directly confirmed invalid measurements"
+  },
+  "review_policy": {
+    "independent_reviews": 2,
+    "distinct_invocation_ids": true,
+    "static_scan_after_blind_review": true,
+    "structural_delta_required": true
+  },
+  "structural_delta_required": true,
+  "core_computation": "triton-only"
+}

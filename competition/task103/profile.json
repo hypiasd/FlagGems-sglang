@@ -1,0 +1,49 @@
+{
+  "schema_version": 2,
+  "task_id": "task103",
+  "operator": "recompute_w_u",
+  "entrypoint": "recompute_w_u(k, v, beta, g_cumsum, A, cu_seqlens)",
+  "package_members": [
+    "recompute_w_u.py"
+  ],
+  "targets": [
+    "iluvatar",
+    "metax",
+    "hygon",
+    "kunlunxin",
+    "ascend",
+    "intl_a",
+    "intl_b"
+  ],
+  "target_labels": {},
+  "contract_source": {
+    "kind": "official-api",
+    "url": "https://flagos.io/flagos/api/v1/races/782kzq4m/operator-tasks/recompute_w_u",
+    "verified_at": "2026-10-01"
+  },
+  "case_coverage": "development-assumptions",
+  "official_cases_complete": false,
+  "hardware_requirements": {
+    "bf16_tensor_core": true
+  },
+  "publication_policy": null,
+  "review_policy": {
+    "independent_reviews": 2
+  },
+  "structural_delta_required": true,
+  "core_computation": "triton-only",
+  "dtype": {
+    "k": "bf16",
+    "v": "bf16",
+    "A": "bf16",
+    "beta": "fp32",
+    "g_cumsum": "fp32"
+  },
+  "tolerance": {
+    "bf16": {
+      "atol": 0.015,
+      "rtol": 0.015
+    }
+  },
+  "scope": "cu_seqlens=None; T % BT == 0; GQA h//(H//Hg)"
+}

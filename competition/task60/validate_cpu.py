@@ -25,11 +25,11 @@ except ModuleNotFoundError:
 
 
 ROOT = Path(__file__).resolve().parents[2]
-MODEL_PATH = ROOT / "competition/task78/validate_cpu.py"
+MODEL_PATH = ROOT / "competition/experiments/cpu_model.py"
 
 
 def load_cpu_model():
-    spec = importlib.util.spec_from_file_location("_flagos_task78_cpu_model", MODEL_PATH)
+    spec = importlib.util.spec_from_file_location("_flagos_shared_cpu_model", MODEL_PATH)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"cannot load shared CPU model: {MODEL_PATH}")
     module = importlib.util.module_from_spec(spec)
@@ -60,10 +60,10 @@ def make_input(values: list[int], dtype, strided: bool) -> torch.Tensor:
     return view
 
 
-def run_kernel_case(wrapper, model, values: list[int], dtype, strided: bool) -> int:
+def run_kernel_case(wrapper, model, validation_call, values: list[int], dtype, strided: bool) -> int:
     source = make_input(values, dtype, strided)
     expected = (source - 1).clamp_min(0).contiguous()
-    call = model.ValidationCall((source,))
+    call = validation_call((source,))
     real_empty_like = torch.empty_like
     real_empty = torch.empty
 
@@ -122,7 +122,7 @@ def run(source_path: Path, verbose: bool = False) -> int:
         for dtype in (torch.int32, torch.int64, torch.float32):
             for size, values in values_by_size.items():
                 for strided in (False, True):
-                    launched = run_kernel_case(wrapper, model, values, dtype, strided)
+                    launched = run_kernel_case(wrapper, model, model_module.ValidationCall, values, dtype, strided)
                     cases += 1
                     launches += launched
                     if verbose:

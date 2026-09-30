@@ -46,3 +46,6 @@ result_*.log
 # information for Eclipse / Flash Builder.
 
 .DS_Store
+
+# Private device configuration, frozen experiments and profiler captures
+/competition/.local/
