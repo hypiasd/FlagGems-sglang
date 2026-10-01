@@ -236,5 +236,154 @@ class DiagnoseTest(unittest.TestCase):
         self.assertIn("carry_forward_file", result["reuse_rule"])
 
 
+def kunlunxin_error_marker():
+    return "kunlunxin: source"
+
+
+class EnforceTest(unittest.TestCase):
+    """A package may only drop a chip off its carry-forward bytes on record."""
+
+    def build(self, scores, sha):
+        scores = dict(scores)
+        scores["kunlunxin"] = scores.get("kunlunxin", 1.5)
+        return scores, sha
+
+    def setup_plan(self, local):
+        write_sources(
+            local,
+            "adapt-a",
+            {f"{OP}.py": "GENERIC", f"{OP}_kunlunxin.py": "KUNLUN"},
+        )
+        source = Path(local) / "adaptations" / "adapt-a" / "source"
+        kunlun = digest(source / f"{OP}_kunlunxin.py")
+        generic = digest(source / f"{OP}.py")
+        records = [
+            record(
+                "r1",
+                "2026-10-01T10:00:00",
+                {t: 4.0 for t in TARGETS} | {"kunlunxin": 1.5},
+                sha=generic,
+            )
+        ]
+        # only kunlunxin was produced by its own file; the rest used generic
+        records[0]["targets"]["kunlunxin"]["source_sha256"] = kunlun
+        return records, source, kunlun, generic
+
+    def release(self, kunlunxin_source, **overrides):
+        """A release whose other targets keep the generic bytes."""
+        entry = {
+            "source": kunlunxin_source,
+            "structural_change": "kunlunxin 改用 mask-free 宽路径",
+            "expected_mechanism": "减少昆仑芯上的掩码开销",
+        }
+        entry.update(overrides)
+        targets = {
+            t: {
+                "source": f"{OP}.py",
+                "structural_change": f"{t} 保持",
+                "expected_mechanism": f"{t} 沿用",
+            }
+            for t in TARGETS
+        }
+        targets["kunlunxin"] = entry
+        return {"targets": targets}
+
+    def test_carried_forward_passes(self) -> None:
+        with tempfile.TemporaryDirectory() as local:
+            records, source, _, _ = self.setup_plan(local)
+            release = self.release(f"{OP}_kunlunxin.py")
+            result = decide.enforce(
+                "task103", local, release, source, records=records
+            )
+        self.assertTrue(result["passed"])
+        self.assertIn("kunlunxin", result["carried"])
+        self.assertFalse(result["deviated"])
+
+    def test_silent_deviation_is_blocked(self) -> None:
+        with tempfile.TemporaryDirectory() as local:
+            records, source, _, _ = self.setup_plan(local)
+            release = self.release(f"{OP}.py")
+            release["targets"]["kunlunxin"]["structural_change"] = "换实现"
+            release["targets"]["kunlunxin"]["expected_mechanism"] = "更快"
+            result = decide.enforce(
+                "task103", local, release, source, records=records
+            )
+        self.assertFalse(result["passed"])
+        self.assertEqual(result["undeclared_deviations"], ["kunlunxin"])
+        joined = " ".join(result["errors"])
+        self.assertIn("does not declare the change", joined)
+        self.assertIn(kunlunxin_error_marker(), joined)
+
+    def test_declared_without_naming_the_chip_is_blocked(self) -> None:
+        with tempfile.TemporaryDirectory() as local:
+            records, source, _, _ = self.setup_plan(local)
+            release = self.release(
+                f"{OP}.py",
+                structural_change="改用更宽的向量",
+                expected_mechanism="减少访存",
+            )
+            release["changed_targets"] = ["kunlunxin"]
+            result = decide.enforce(
+                "task103", local, release, source, records=records
+            )
+        self.assertFalse(result["passed"])
+        self.assertIn("does not name this chip", " ".join(result["errors"]))
+
+    def test_declared_and_named_passes(self) -> None:
+        with tempfile.TemporaryDirectory() as local:
+            records, source, _, _ = self.setup_plan(local)
+            release = self.release(f"{OP}.py")
+            release["changed_targets"] = ["kunlunxin"]
+            result = decide.enforce(
+                "task103", local, release, source, records=records
+            )
+        self.assertTrue(result["passed"])
+        self.assertEqual(result["deviated"], ["kunlunxin"])
+
+    def test_per_target_declaration_is_accepted(self) -> None:
+        with tempfile.TemporaryDirectory() as local:
+            records, source, _, _ = self.setup_plan(local)
+            release = self.release(f"{OP}.py", replaces_carry_forward=True)
+            result = decide.enforce(
+                "task103", local, release, source, records=records
+            )
+        self.assertTrue(result["passed"])
+
+    def test_nothing_to_enforce_without_a_result(self) -> None:
+        with tempfile.TemporaryDirectory() as local:
+            write_sources(local, "adapt-a", {f"{OP}.py": "GENERIC"})
+            source = Path(local) / "adaptations" / "adapt-a" / "source"
+            failed = {t: None for t in TARGETS}
+            result = decide.enforce(
+                "task103",
+                local,
+                self.release(f"{OP}.py"),
+                source,
+                records=[
+                    record(
+                        "r1",
+                        "2026-10-01T10:00:00",
+                        failed,
+                        status="evaluating",
+                    )
+                ],
+            )
+        self.assertTrue(result["passed"])
+        self.assertEqual(len(result["no_carry_forward_plan"]), len(TARGETS))
+
+    def test_missing_numeric_forecast_is_reported(self) -> None:
+        with tempfile.TemporaryDirectory() as local:
+            records, source, _, _ = self.setup_plan(local)
+            result = decide.enforce(
+                "task103",
+                local,
+                self.release(f"{OP}_kunlunxin.py"),
+                source,
+                records=records,
+            )
+        self.assertIn("kunlunxin", result["forecast_missing"])
+        self.assertIn("text check", result["note"])
+
+
 if __name__ == "__main__":
     unittest.main()

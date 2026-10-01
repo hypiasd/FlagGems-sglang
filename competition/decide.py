@@ -281,3 +281,85 @@ def diagnose(task, local, records=None):
             "provisional observations may be revised"
         ),
     }
+
+
+def _names_chip(text, target, filename):
+    """Cheap text check that a hypothesis names the chip it replaces."""
+    haystack = str(text or "")
+    return target in haystack or (filename or "") in haystack
+
+
+def enforce(task, local, release, source_dir, records=None):
+    """Block a package that drops a chip off its carry-forward source silently.
+
+    The plan says which bytes produced each chip's best value.  Replacing them
+    is allowed, but only when the release declares the chip and its hypothesis
+    names it.  Without this the package is rebuilt by hand and a regression
+    looks exactly like an improvement until the platform scores it.
+    """
+    source_dir = Path(source_dir)
+    plan = diagnose(task, local, records=records)["next_package"]
+    targets = release.get("targets") or {}
+    declared = set(release.get("changed_targets") or [])
+    errors, carried, deviated, undeclared, no_plan = [], [], [], [], []
+    for target, entry in sorted(plan.items()):
+        expected = entry.get("carry_forward_sha256")
+        item = targets.get(target) or {}
+        filename = item.get("source")
+        if not expected or not filename:
+            no_plan.append(target)
+            continue
+        path = source_dir / filename
+        actual = digest(path) if path.is_file() else None
+        if actual == expected:
+            carried.append(target)
+            continue
+        deviated.append(target)
+        marked = target in declared or item.get("replaces_carry_forward") is True
+        if not marked:
+            undeclared.append(target)
+            errors.append(
+                f"{target}: source {filename} is not the bytes that produced "
+                f"its best value ({expected[:8]}), and the release does not "
+                "declare the change; add the target to changed_targets or set "
+                "replaces_carry_forward"
+            )
+            continue
+        prose = " ".join(
+            str(item.get(key) or "")
+            for key in ("structural_change", "expected_mechanism")
+        )
+        if not _names_chip(prose, target, filename):
+            errors.append(
+                f"{target}: the change is declared but the hypothesis at "
+                "structural_change/expected_mechanism does not name this chip"
+            )
+    missing_forecast = sorted(
+        target
+        for target in plan
+        if not isinstance(
+            (targets.get(target) or {}).get("expected_speedup"), (int, float)
+        )
+    )
+    return {
+        "passed": not errors,
+        "errors": errors,
+        "declared_changes": sorted(declared),
+        "carried": carried,
+        "deviated": deviated,
+        "undeclared_deviations": undeclared,
+        "no_carry_forward_plan": no_plan,
+        "plan_basis": {
+            target: {
+                "value": entry.get("value"),
+                "evidence_record_id": entry.get("evidence_record_id"),
+                "file": entry.get("carry_forward_file"),
+            }
+            for target, entry in sorted(plan.items())
+        },
+        "forecast_missing": missing_forecast,
+        "note": (
+            "the chip-name check is a text check; it does not verify that the "
+            "hypothesis is correct"
+        ),
+    }

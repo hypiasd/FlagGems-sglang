@@ -76,6 +76,10 @@ def publication_check(dest):
         compiler[target] = scan["findings"]
         if scan["blockers"]:
             errors.append(f"{target}: unresolved compiler blockers")
+    carry_forward = decide.enforce(
+        contract["task_id"], store.LOCAL, manifest, dest / "source"
+    )
+    errors.extend(carry_forward["errors"])
     reviews = manifest.get("reviews", [])
     review_ids = {item.get("invocation_id") for item in reviews if item.get("invocation_id")}
     if len(review_ids) < contract["review_policy"].get("independent_reviews", 2) or any(item.get("novel_findings") for item in reviews):
@@ -95,7 +99,14 @@ def publication_check(dest):
         projected = manifest.get("projected_aggregate")
         if not manifest.get("forecast_evidence") or not all(isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) and v > 0 for v in (goal, projected)) or projected <= goal:
             errors.append("task-specific frozen goal and evidenced forecast improvement are required")
-    return {"passed": not errors, "errors": errors, "compiler": compiler, "structural_delta": structure, "limitation": "forecasts and local validation are not official target results"}
+    return {
+        "passed": not errors,
+        "errors": errors,
+        "compiler": compiler,
+        "structural_delta": structure,
+        "carry_forward": carry_forward,
+        "limitation": "forecasts and local validation are not official target results",
+    }
 
 
 def inspect(task, refresh=False):
@@ -188,6 +199,14 @@ def main(argv=None):
             package = make_package(dest / "source", dest / "package.zip", contract)
             publication = None if args.package_only else publication_check(dest)
             result = {"package": package, "publication": publication, "passed": package["passed"] and (args.package_only or publication["passed"])}
+            if args.package_only and (dest / "release.json").is_file():
+                preview = decide.enforce(
+                    contract["task_id"],
+                    store.LOCAL,
+                    store.load_json(dest / "release.json"),
+                    dest / "source",
+                )
+                result["carry_forward_preview"] = {"blocking": False, "preview": preview}
             manifest = store.load_json(dest / "adaptation.json")
             manifest.update(status="package_checked" if args.package_only and result["passed"] else "ready" if result["passed"] else "blocked", package_sha256=package["archive_sha256"], source_hashes={p.name: store.digest(p) for p in (dest / "source").glob("*.py")})
             store.write_json(dest / "adaptation.json", manifest)

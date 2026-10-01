@@ -225,3 +225,12 @@ python -m competition.adaptation decide --task taskNN --next-package
 `headroom` 与 `marginal_aggregate_gain_upper_bound` 都是**上界**，不是预测：估算一次只动一颗芯片，而平台一次给整包打分。
 
 Task 103 当前输出：`iluvatar`（0.17，+0.47）→ `intl_a`（0.89，+0.36）→ `kunlunxin`（1.85，+0.23）→ `metax`（4.98，+0.18），上界合计 +1.24；其余 `hold_re_measure` / `keep`。
+
+**强制项：`check` 会对照沿用计划阻断。** `publication_check` 逐目标比较实际源码字节与该芯片"产出最佳值"的字节：
+
+- 一致 → 通过（`carried`）；
+- 不一致 → 必须在 `release.json` 里**显式声明**该芯片：`changed_targets: ["<chip>"]` 或该目标条目写 `replaces_carry_forward: true`；**并且** 该目标的 `structural_change` / `expected_mechanism` 必须**指名这颗芯片**（写芯片名或文件名），否则 `check` 报错阻断，记录 `deviated` / `undeclared_deviations`；
+- 该芯片没有可用观测（无沿用计划）→ 不受约束，列进 `no_carry_forward_plan`；
+- `--package-only` 只给**非阻断预览**（`carry_forward_preview`），不影响 `passed`。
+
+边界必须一起读：芯片名检查是**文本检查**，只保证"声明过且指名了"，**不验证论证是否正确**；`forecast_missing` 会列出没有数值 `expected_speedup` 的目标（当前只提示，不阻断，因为现有 `release.json` 都没有这个字段）。

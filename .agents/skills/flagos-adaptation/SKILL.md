@@ -9,7 +9,7 @@ description: 将 FlagOS 实验候选适配到官方多芯片契约，检查发�
 
 1. `inspect --refresh` 保存官方公开契约证据。提交前通过 Chrome 确认当前任务、批次、登录团队、剩余额度、最近记录及重复包；公共 API 信息不代表提交授权。
 2. 从冻结实验用 `prepare` 建立独立适配目录。需要后端变化时编辑适配源码，再填 `release.json`。实验源码不变。包成员是 `profile.json` 的 `package_members`：平台按后缀把芯片路由到 `<op>_<chip>.py`，没有专用文件才用 `<op>.py`（实测：Task 103 昆仑芯 generic 0.09× → 专用文件 1.85×）。清单声明少了会让未声明的专用文件**被静默丢掉**，所以 `new`/`prepare`/`package` 都会 fail closed；开工前用 `members --task taskNN --source PATH` 看每颗芯片由哪个文件服务、哪些芯片共用 generic（共用 generic 的芯片就是还没单独优化过的那些）。
-3. `check` 检查包、逐目标结构变化、源码/基线绑定、静态兼容性、独立审查、完整正确性和题目发布门槛。`--package-only` 只证明包有效，不能作为发布通过。缺失证据保持 blocked，不填造预测。
+3. `check` 检查包、逐目标结构变化、源码/基线绑定、静态兼容性、独立审查、完整正确性和题目发布门槛。`--package-only` 只证明包有效，不能作为发布通过。缺失证据保持 blocked，不填造预测。**`check` 还会对照沿用计划阻断**：某颗芯片的源码字节不是产出它最佳值的字节时，必须在 `release.json` 里声明该芯片（`changed_targets` 或该目标的 `replaces_carry_forward`）并让 `structural_change`/`expected_mechanism` 指名它，否则报错；没有观测的芯片不受约束；`--package-only` 只给非阻断预览。
 4. 仅在会话已授权提交且完整检查通过后执行 Chrome 上传。上传前将 adaptation.json 写为 `upload_armed`，记录包哈希、任务/批次/团队标识、可见额度及时间；同目录 events.jsonl 追加事件。上传后立即记录平台 record_id 和 submitted 状态。
 5. 中断恢复先检查 Chrome 的最近记录；`upload_armed` 或更后不得盲目重复上传。包变化使原检查失效，必须重新检查。沿用超过 120 秒的提交间隔和当前可见额度限制。
 6. `record` 回填带平台证据、提交 ID 和包哈希的官方观测；评测中到完成可追加修订，同内容重试幂等。失败、异常及排除原因完整保留。确认全部本题目标通过、官方聚合有效后才比较成绩。每次回填后用 `report --targets` 看**逐目标账本**：聚合最优不等于逐芯片最优，逐目标账本给出每颗芯片的 `best_eligible` / `best_observed` / `source_versions` / 与最佳的差距和判读（源码未变则是复测抖动，源码变了才是版本回退）。看到某芯片数值比历史低时，先查 `source_versions`：只有 1 个版本就说明是平台重复测量的差异，不要当作版本退化，也不要据此改实现。
