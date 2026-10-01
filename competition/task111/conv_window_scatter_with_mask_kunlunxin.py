@@ -94,7 +94,6 @@ def _conv_window_scatter_kernel(
     N_CHUNK: tl.constexpr,
     ROW_BLOCK: tl.constexpr,
     REQUESTS: tl.constexpr,
-    REQ_BLOCK: tl.constexpr,
 ):
     position = tl.program_id(0)
     layer = position // (CACHE * N_CHUNK)
@@ -102,19 +101,16 @@ def _conv_window_scatter_kernel(
     slot = rest // N_CHUNK
     chunk = rest % N_CHUNK
 
-    # Reverse mapping, resolved in-kernel as one block load plus a reduction:
-    # the highest-index valid request that targets this slot.
-    req = tl.arange(0, REQ_BLOCK)
-    req_mask = req < REQUESTS
-    targets = tl.load(dst_idx_ptr + req, mask=req_mask, other=-1)
-    candidates = tl.load(step_idx_ptr + req, mask=req_mask, other=-1)
-    valid = (targets == slot) & (candidates >= 0)
-    source = tl.max(tl.where(valid, req, -1), axis=0)
-    # Exactly one entry satisfies `req == source` and its candidate is >= 0, so
-    # a second maximum (with -1 as the neutral element) extracts `step` without
-    # a gather; when nothing matched, `source == -1` fires nowhere and step stays
-    # -1, which is unused because `hit` is false.
-    step = tl.max(tl.where(req == source, candidates, -1), axis=0)
+    # Reverse mapping, resolved in-kernel: the highest-index valid request that
+    # targets this slot.  ``REQUESTS`` is the request count, not a block size.
+    source = -1
+    step = 0
+    for i in range(REQUESTS):
+        target = tl.load(dst_idx_ptr + i)
+        candidate = tl.load(step_idx_ptr + i)
+        match = (target == slot) & (candidate >= 0)
+        source = tl.where(match, i, source)
+        step = tl.where(match, candidate, step)
     hit = source >= 0
 
     row = chunk * ROW_BLOCK + tl.arange(0, ROW_BLOCK)
@@ -129,7 +125,8 @@ def _conv_window_scatter_kernel(
         + window_index * dst_s3
     )
     # Slots that resolve to a request overwrite their destination value, so
-    # reading it first would be a dead load.
+    # reading it first would be a dead load.  Dropping it removes the
+    # `requests / cache` share of the destination read stream.
     value = tl.load(dst_ptr + dst_offset, mask=in_row & (~hit), other=0.0)
 
     src_offset = (
@@ -158,7 +155,6 @@ def conv_window_scatter_with_mask(dst, src, dst_indices_raw, step_indices_raw):
     row_length = dim * window
     row_block = min(triton.next_power_of_2(max(row_length, 1)), _ROW_CAP)
     chunks = triton.cdiv(row_length, row_block)
-    req_block = max(triton.next_power_of_2(max(requests, 1)), 2)
     out = torch.empty_like(dst)
 
     _conv_window_scatter_kernel[(layers * cache * chunks,)](
@@ -186,7 +182,6 @@ def conv_window_scatter_with_mask(dst, src, dst_indices_raw, step_indices_raw):
         chunks,
         row_block,
         requests,
-        req_block,
         num_warps=4,
         num_stages=1,
         # Skips add_tritonxpu_unroll_control_pass, the pass named in the
