@@ -118,6 +118,7 @@ class SnapshotTests(unittest.TestCase):
         self.assertTrue(ledger.validate(row, self.contract))
     def test_task_target_count_is_not_global_eight(self):
         row = {"record_id": "r", "submitted_at": "t", "evidence_class": "official-platform", "evidence": "fixture", "local_archive_sha256": "a" * 64,
+               "status": "completed",
                "targets": {"a": {"status": "pass", "speedup": 1}, "b": {"status": "pass", "speedup": 2}}, "pass_count": 2, "aggregate_speedup": 1.5}
         self.assertEqual(ledger.validate(row, self.contract), [])
     def test_constant_only_change_is_not_structural(self):

@@ -239,6 +239,44 @@ class ShapeTest(unittest.TestCase):
         )
         self.assertEqual(sorted(result["targets"]), sorted(TARGETS))
 
+    def test_a_row_without_a_lifecycle_status_is_rejected(self) -> None:
+        """A missing `status` used to be accepted and then silently dropped.
+
+        `target_ledger` filters on ``status == "completed"``, so a row without
+        the field is invisible to every per-target report while still looking
+        recorded.  The first real Task 112 backfill hit exactly that, so the
+        field is now part of validation instead of an unwritten convention.
+        """
+        row = record("r1", "2026-10-01T10:00:00+08:00", full())
+        del row["status"]
+        row.update(
+            {"evidence_class": "official-platform", "evidence": "fixture"}
+        )
+        errors = ledger.validate(row, ledger.profile("task103"))
+        self.assertTrue(any("status" in error for error in errors), errors)
+        for value in ("submitted", "evaluating", "completed"):
+            accepted = record("r1", "2026-10-01T10:00:00+08:00", full())
+            accepted["status"] = value
+            accepted.update(
+                {"evidence_class": "official-platform", "evidence": "fixture"}
+            )
+            self.assertEqual(
+                ledger.validate(accepted, ledger.profile("task103")), []
+            )
+        rejected = record("r1", "2026-10-01T10:00:00+08:00", full())
+        rejected["status"] = "done"
+        rejected.update(
+            {"evidence_class": "official-platform", "evidence": "fixture"}
+        )
+        self.assertTrue(
+            any(
+                "status" in error
+                for error in ledger.validate(
+                    rejected, ledger.profile("task103")
+                )
+            )
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

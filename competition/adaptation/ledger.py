@@ -20,6 +20,10 @@ def validate(row, contract):
     errors = []
     if not row.get("record_id") or not row.get("submitted_at"):
         errors.append("official record ID and submission time are required")
+    # The lifecycle field is what target_ledger filters on; a row without it is
+    # silently invisible to every per-target report, so it must be explicit.
+    if row.get("status") not in {"submitted", "evaluating", "completed"}:
+        errors.append("status must be one of submitted/evaluating/completed")
     if row.get("evidence_class") != "official-platform" or not row.get("evidence"):
         errors.append("official platform evidence is required; GPU experiments are not official scores")
     digest = row.get("local_archive_sha256", "")

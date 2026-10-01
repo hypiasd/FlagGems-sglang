@@ -135,6 +135,26 @@ m' = max(m, lse_i);  s = s*exp(m-m') + exp(lse_i-m');  a = a*exp(m-m') + exp(lse
 3. **真实 bug：越界守卫写错**。`pairs` 变体最初把守卫写成 `position < H`（应为 `position < B*H`）。原先只能用 `PAIRS=5` 的合成配置强制走非整除路径，**写覆盖检查**才抓住它：`n2-base-e.out: write coverage missing=1536`（输出元素被整块漏写，而数值比对根本不会发现未初始化内存）。补上 `n7-b7h1-base2` 后，用例表用自己的 `PAIRS` 就能复现：`write coverage missing=384`。
 4. **覆盖漏洞（元问题）**：`vec` 变体删掉输出行掩码后**照样 10/10 通过**——因为开发用例全是整除的，掩码行从未出现。这说明"变体通过"当时并不覆盖它自己的分支。补 `n3-b1h3-d96`、`n7-b7h1-base2` 两个非整除/非 2 幂用例后，该否证对照才按预期失败。教训写进工作流：**每个结构性变体都要配一个能杀掉它的否证对照，且对照必须真的失败过。**
 
+## 官方首次提交（2026-10-01 22:44，第 8 批）
+
+种子候选（`db712e60…`，包 sha `f6354c80…`，adaptation `adapt-21d98da947d3`）已提交，平台评测**已完成**：
+
+| 目标 | 结果 |
+|---|---|
+| 天数智芯 iluvatar | 18.93× |
+| 沐曦 metax | 5.37× |
+| 海光信息 hygon | 18.65× |
+| **昆仑芯 kunlunxin** | **Failed** |
+| 华为 ascend | 2.54× |
+| 国际通用芯片A intl_a | 10.91× |
+| 国际通用芯片B intl_b | 8.48× |
+| **合计** | **6/7**，聚合为空（官方要求七目标全通过） |
+
+- 同题竞争面：赛题卡显示**已 40 次提交**、当前榜一 **8.48×**；本批**截止 2026-10-08 19:59**。
+- 官方账本已回填（`competition/task112/official-records.jsonl`，record `task112-2026-10-01T22:44+08:00-f6354c8069f2`）；回填行最初漏了 `status` 字段导致 `report --targets` 全空，现已把该字段纳入 `ledger.validate`。
+- **结果驱动的下一步很明确**：六颗芯片通过且数值都不低，昆仑芯是唯一失败项，整包因此不计分 → 下一个包应该是「六颗沿用现有字节 + 昆仑芯专用文件」。注意 Task 103 的昆仑芯失败原因是 `tl.dot` 降级与 `uni_sram` 资源不足，而本题种子在昆仑芯上的失败细节平台不暴露（`Failed` 单元格无悬停信息），所以昆仑芯专用文件要按 Task 103 的教训避开 `tl.dot` 与超大 SRAM 占用。
+- `decide --task task112` 当前给出：iluvatar/hygon/intl_a `keep`，metax/ascend/intl_b `rework_behind_reference`，kunlunxin `blocked_no_eligible_result`。注意本题聚合模型仍是 `unverified`（只有一条记录，无法核验算术平均），所以边际收益只作定性参考。
+
 ## 未验证（当前无法验证）
 
 - **目标芯片正确性、设备行为与任何性能数据**：CPU 语义模型明确不提供这些（`LIMIT` 行每次都打印），租用设备仍不可达（`doctor --device t4` → `SSH scratch creation failed`）。
