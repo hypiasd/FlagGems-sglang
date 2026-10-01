@@ -82,9 +82,23 @@ class ProfileTest(unittest.TestCase):
         self.assertIsNone(PROFILE["publication_policy"])
 
     def test_package_members_cover_the_operator_module(self) -> None:
-        self.assertEqual(
-            PROFILE["package_members"], [f"{PROFILE['operator']}.py"]
-        )
+        """Members must be the generic module plus declared chip modules only.
+
+        The list grew from one file to two when Kunlunxin failed the first
+        official submission: a dedicated ``<op>_<chip>.py`` is only legal when
+        the chip is one of this task's targets and the generic module is still
+        shipped, so the assertion is about that shape rather than a fixed list.
+        """
+        generic = f"{PROFILE['operator']}.py"
+        self.assertIn(generic, PROFILE["package_members"])
+        for name in PROFILE["package_members"]:
+            self.assertTrue(name.endswith(".py"), name)
+            if name == generic:
+                continue
+            self.assertTrue(name.startswith(f"{PROFILE['operator']}_"), name)
+            suffix = name[len(PROFILE["operator"]) + 1 : -len(".py")]
+            self.assertIn(suffix, PROFILE["targets"], name)
+        self.assertEqual(len(set(PROFILE["package_members"])), len(PROFILE["package_members"]))
         layout = members.audit(
             PROFILE["operator"],
             TASK,

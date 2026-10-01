@@ -4,7 +4,8 @@
   "operator": "dcp_lse_combine",
   "entrypoint": "dcp_lse_combine(recv_output, recv_lse, is_lse_base_on_e, return_lse)",
   "package_members": [
-    "dcp_lse_combine.py"
+    "dcp_lse_combine.py",
+    "dcp_lse_combine_kunlunxin.py"
   ],
   "targets": [
     "iluvatar",
