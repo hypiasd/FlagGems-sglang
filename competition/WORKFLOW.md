@@ -39,6 +39,10 @@ python -m competition.experiments doctor --device t4
 
 doctor 报告 GPU、显存、能力、驱动、PyTorch、Triton、CUDA 和 profiler。工具存在不代表有采集权限；实际 `profile` 成功才证明该次采集有效。T4 不支持原生 BF16 Tensor Core 路径。
 
+### 编译环境与 Triton-TLE 能力
+
+优化前按 [Triton / TLE 指南检查清单](TLE_GUIDE.md) 核实目标编译器版本、原语支持与匹配示例。指南推荐版本不等于赛事实测版本；未列芯片记 unknown，不推断 unsupported。先解决编译兼容性，再根据目标瓶颈选择普通 Triton、TLE-Lite 或显式结构实现；不盲用其他芯片的原语。Failed 单元格须点击查看编译详情，资源包装标签不直接当根因。该清单目前人工执行，不是 CLI 自动能力门禁。
+
 ### 每轮操作
 
 1. 写候选，记录能被实验否定的假设。
