@@ -219,6 +219,15 @@ class CandidateTest(unittest.TestCase):
                 and isinstance(node.func.value, ast.Name)
                 and node.func.value.id == "torch"
             ):
+                if node.func.attr == "tensor":
+                    # Metadata only: a literal list of stride/shape integers.
+                    # Anything else would be computing on operator data in
+                    # torch, which the task forbids.
+                    self.assertTrue(
+                        node.args and isinstance(node.args[0], ast.List),
+                        "torch.tensor may only build a literal metadata buffer",
+                    )
+                    continue
                 self.assertIn(
                     node.func.attr,
                     {"empty", "empty_like", "new_empty", "promote_types"},
