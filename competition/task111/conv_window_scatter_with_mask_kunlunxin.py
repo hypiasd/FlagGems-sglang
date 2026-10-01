@@ -24,15 +24,37 @@ scalar ``tl.where`` selections.  Here the request table is loaded as one block
 and reduced instead: same semantics ("highest-index valid request wins"), no
 unrolled scalar chain, and the loop-carried dependency disappears.
 
-Compatibility hypothesis and its falsifier, kept separate from performance:
-  * hypothesis: the unrolled scalar chain is what trips ``TritonXPUUnrollControl``;
-  * falsifier: if Kunlunxin still reports the same pass failure with this file,
-    the scan is not the trigger and the next test must bisect the remaining
-    constructs (integer ``//``/``%`` by the non-power-of-two ``WINDOW``, the
-    masked load/store, the ``tl.where`` merge).
+That change did **not** fix Kunlunxin: submission 10-02 07:22 still reported the
+identical ``TritonXPUUnrollControl`` failure, so the hypothesis "the unrolled
+scalar scan is the trigger" is falsified and recorded in
+``platform-failures.jsonl``.
 
-Nothing else is changed: the schedule, the addressing, the masks and the
-``num_stages`` hint are the generic ones.
+The change that follows from the backend source
+----------------------------------------------
+``triton/backends/xpu/compiler.py`` (FlagTree 0.6.1+xpu3.6) shows
+
+    if not metadata["isCloseUnrollControl"]:
+        xpu.passes.ttxpuir.add_tritonxpu_unroll_control_pass(...)
+
+and ``XPUBackend.parse_options`` copies every ``XPUOptions`` dataclass field out
+of the launch options, so ``isCloseUnrollControl`` reaches that metadata and
+**removes the exact pass that is failing from the pipeline**.  The same file also
+shows why the reported cause is misleading:
+
+    except Exception as e:
+        raise OutOfResources(0, 0, f"uni_sram {e}")
+
+-- every exception inside ``make_ttxir`` is re-labelled as an SRAM shortage, so
+"Required: 0, Hardware limit: 0" never meant SRAM exhaustion.
+
+This file is XPU-only by construction: the option is understood by the XPU
+backend and rejected by other backends, and ``members.audit`` routes the
+``_kunlunxin`` suffix to this target alone.
+
+Falsifier for this change: if Kunlunxin still reports
+``TritonXPUUnrollControl``, the platform's FlagTree build does not honour this
+option (the guide notes the recommended wheel is *not* the event runtime build),
+and the next step is to bisect the remaining constructs against that build.
 """
 
 from __future__ import annotations
@@ -101,7 +123,10 @@ def _conv_window_scatter_kernel(
     window_index = row % WINDOW
 
     dst_offset = (
-        layer * dst_s0 + slot * dst_s1 + dim_index * dst_s2 + window_index * dst_s3
+        layer * dst_s0
+        + slot * dst_s1
+        + dim_index * dst_s2
+        + window_index * dst_s3
     )
     # Slots that resolve to a request overwrite their destination value, so
     # reading it first would be a dead load.
@@ -118,7 +143,10 @@ def _conv_window_scatter_kernel(
     value = tl.where(hit, gathered, value)
 
     out_offset = (
-        layer * out_s0 + slot * out_s1 + dim_index * out_s2 + window_index * out_s3
+        layer * out_s0
+        + slot * out_s1
+        + dim_index * out_s2
+        + window_index * out_s3
     )
     tl.store(out_ptr + out_offset, value, mask=in_row)
 
@@ -161,5 +189,8 @@ def conv_window_scatter_with_mask(dst, src, dst_indices_raw, step_indices_raw):
         req_block,
         num_warps=4,
         num_stages=1,
+        # Skips add_tritonxpu_unroll_control_pass, the pass named in the
+        # platform's failure.  Understood only by the XPU backend.
+        isCloseUnrollControl=True,
     )
     return out

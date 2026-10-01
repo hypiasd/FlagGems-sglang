@@ -125,6 +125,62 @@ class Ptr:
         return mask, addresses
 
 
+#: Launch options are not kernel arguments and do not change the computation
+#: this model validates, so they are dropped before binding.  Enumerated
+#: explicitly (rather than "drop anything unknown") so that a misspelled
+#: *constexpr name* still fails here instead of silently binding nothing.
+#: The XPU entries are the ``XPUOptions`` fields of
+#: ``triton/backends/xpu/compiler.py`` (FlagTree 0.6.1+xpu3.6); a dedicated
+#: per-chip file legitimately passes them.
+BACKEND_OPTIONS = {
+    "num_warps",
+    "num_stages",
+    "num_ctas",
+    "maxnreg",
+    "cluster_dims",
+    "enable_fp_fusion",
+    "launch_cooperative_grid",
+    "launch_pdl",
+    "debug",
+    "sanitize_overflow",
+    "extern_libs",
+    "backend_name",
+    "instrumentation_mode",
+    "supported_fp8_dtypes",
+    "deprecated_fp8_dtypes",
+    "default_dot_input_precision",
+    "allowed_dot_input_precisions",
+    "max_num_imprecise_acc_default",
+    "allow_fp8e4nv",
+    "allow_fp8e4b15",
+    # XPU / Kunlunxin
+    "arch",
+    "grid",
+    "cluster_num",
+    "core_num",
+    "buffer_size_limit",
+    "groups_per_cluster",
+    "unroll_num",
+    "is_use_mask_zero",
+    "is_sdnn",
+    "isOpenCmpNan",
+    "isCloseOffsetAnalysis",
+    "isCloseCoreTiling",
+    "isCloseUnrollControl",
+    "isCloseVectorization",
+    "isCloseMemoryCache",
+    "isCloseClusterLoopGrid",
+    "isClusterOneCoreActOnly",
+    "isCLOSE_TTXPU_O_ATOMIC_SIM",
+    "isCloseDtypeConvert",
+    "isCloseInterleave",
+    "isCloseMemoryAsync",
+    "isAutoCoreTiling",
+    "exp_range",
+    "use_int4_w4a8",
+}
+
+
 class RestrictedModule(ModuleType):
     def __getattr__(self, name):
         if name.startswith("__"):
@@ -160,8 +216,9 @@ class PythonJIT:
                 defaults = getattr(self, "autotune_defaults", {})
             for name, value in defaults.items():
                 kwargs.setdefault(name, value)
-            for option in ("num_warps", "num_stages"):
-                kwargs.pop(option, None)
+            for option in list(kwargs):
+                if option in BACKEND_OPTIONS:
+                    kwargs.pop(option)
             # Unknown options/arguments must fail; do not silently drop them.
             bound = self.signature.bind(*args, **kwargs)
             bound.apply_defaults()
