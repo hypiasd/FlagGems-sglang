@@ -10,6 +10,7 @@ import uuid
 import urllib.request
 from pathlib import Path
 from competition.experiments import store
+from competition import members
 from .compiler_scan import inspect_source
 from .ledger import record, summary, target_ledger
 from .packaging import make_package, validate_package
@@ -19,6 +20,10 @@ from .structure import normalized_ast
 def prepare(run_id, baseline=None):
     root = store.run_path(run_id)
     experiment = store.verify(root)
+    contract = store.load_json(root / "contract.json")
+    layout = members.audit(contract["operator"], root / "source", contract["targets"], contract["package_members"])
+    if not layout["passed"]:
+        raise ValueError("the frozen run has an inconsistent package layout: " + "; ".join(layout["errors"]))
     identifier = "adapt-" + uuid.uuid4().hex[:12]
     dest = store.LOCAL / "adaptations" / identifier
     shutil.copytree(root / "source", dest / "source")
@@ -110,6 +115,30 @@ def inspect(task, refresh=False):
     return result
 
 
+def members_command(task, source=None, adaptation=None):
+    """Show the package layout a task would ship, and any contract drift.
+
+    The answer to "may this chip have its own file" is yes, and this command
+    says which chips already have one, which share the generic module, and
+    whether a recent package carried files the current contract no longer
+    declares (the silent-drop case).
+    """
+    contract = store.profile(task)
+    result = {"task_id": task, "drift": members.drift(task, contract, store.LOCAL)}
+    if adaptation:
+        dest = store.LOCAL / "adaptations" / adaptation
+        contract = store.load_json(dest / "contract.json")
+        source = dest / "source"
+    if source:
+        result["layout"] = members.audit(contract["operator"], source, contract["targets"], contract["package_members"])
+    else:
+        result["layout"] = {
+            "declared": contract.get("package_members"),
+            "targets_without_dedicated": "provide --source to inspect a directory",
+        }
+    return result
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -118,12 +147,18 @@ def main(argv=None):
     p = sub.add_parser("check"); p.add_argument("--adaptation", required=True); p.add_argument("--package-only", action="store_true")
     p = sub.add_parser("record"); p.add_argument("--task", required=True); p.add_argument("--input", type=Path, required=True)
     p = sub.add_parser("report"); p.add_argument("--task", required=True); p.add_argument("--targets", action="store_true")
+    p = sub.add_parser("members")
+    p.add_argument("--task", required=True)
+    p.add_argument("--source", type=Path)
+    p.add_argument("--adaptation")
     args = parser.parse_args(argv)
     try:
         if args.command == "inspect": result = inspect(args.task, args.refresh)
         elif args.command == "prepare": result = prepare(args.run, args.baseline)
         elif args.command == "record": result = record(args.task, store.load_json(args.input))
         elif args.command == "report": result = target_ledger(args.task) if args.targets else summary(args.task)
+        elif args.command == "members":
+            result = members_command(args.task, args.source, args.adaptation)
         else:
             if not args.adaptation.startswith("adapt-") or not args.adaptation[6:].isalnum():
                 raise ValueError("invalid adaptation ID")

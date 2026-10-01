@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 import zipfile
+from competition import members
 from competition.experiments.store import ROOT, LOCAL, digest, load_json
 
 
@@ -21,6 +22,13 @@ def resolve_artifact(task_root, name):
 def validate_package(source, archive, contract):
     expected = set(contract["package_members"])
     errors = []
+    layout = members.audit(
+        contract["operator"],
+        source,
+        contract["targets"],
+        contract["package_members"],
+    )
+    errors.extend(layout["errors"])
     try:
         with zipfile.ZipFile(archive) as stream:
             names = stream.namelist()

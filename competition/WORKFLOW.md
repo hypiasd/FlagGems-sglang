@@ -115,6 +115,23 @@ python -m competition.adaptation report --task task78
 
 `check` 重建包，检查结构差异、哈希、兼容性、完整正确性、审查和本题收益门槛，记录 `ready` / `blocked` / `package_checked`。只改常量或注释不算结构变化。后端新变更应建立新的适配快照；不得把 T4 的加速比回填为官方成绩。
 
+### 包成员与每芯片专用文件
+
+一个包是 `<op>.py`（必需）加上任意个 `<op>_<chip>.py`，其中 `chip` 必须是本题 `targets` 里的名字。平台把某颗芯片路由到它的专用文件，没有专用文件时用 generic。
+
+- **这是实测行为，不是文档规定**：Task 103 的昆仑芯在 generic 文件（`482c55`）下是 **0.09×**，只新增 `recompute_w_u_kunlunxin.py`（`05c363`）后变 **1.85×**，而 generic 文件字节完全没变。Task 78 长期用 7 个文件（generic + 6 个厂商）并正常计分。
+- **清单容易写错，而且错得无声**：成员表就是 `profile.json` 的 `package_members`，打包只写声明里的文件。声明少了 → 未声明的专用文件被**静默丢掉**，而 ZIP 恰好等于声明集合，所以 `validate_package` 会自洽通过、不报错；声明多了或文件不在 → 才报错。Task 103 就发生过：真正提交并拿到 7/7、4.80× 的包是 3 个文件，而 `package_members` 只声明 1 个。
+- **`competition.members` 现在 fail closed**：`new`（冻结实验）、`prepare`（建适配快照）、`package`（`validate_package`）三处都会审计源码目录，出现未声明的 `<op>_<chip>.py`、未知后缀、声明了却不存在的文件、缺少 generic 模块，一律报错而不是丢文件。
+
+```sh
+python -m competition.adaptation members --task taskNN
+python -m competition.adaptation members --task taskNN --source PATH
+python -m competition.adaptation members --task taskNN --adaptation ADAPT_ID
+```
+
+- 输出每颗芯片实际由哪个文件服务（`target_sources`）、哪些芯片**共用 generic**（`targets_without_dedicated`，作为 warning —— 那是剩余优化空间所在），以及**契约漂移** `drift`：当前声明 vs 本机最近实际提交过的包成员。Task 103 实测 `drifted: true`（声明 1 个，最近 26 个包里最新的是 3 个）。
+- 给每颗芯片都配专用文件不是必须的（共用 generic 是合法状态）；但共用意味着这颗芯片在用为别人写的实现，**Task 103 里 `intl_a` 只有 0.89×，低于 1.0 基线**，就是这种情况。
+
 ### 上游仓库 PR（第二条提交通道）
 
 平台 ZIP 和上游仓库是两套契约。平台要一个含 `<op>.py` 与 `<op>_<chip>.py` 的压缩包，在自己的 harness 上评分；[flagos-ai/FlagGems-sglang](https://github.com/flagos-ai/FlagGems-sglang) 要同样的源码放进 dispatcher 树，带 Apache 2.0 头和 `__all__`，并通过 `basic-ci.yml`。竞赛规则是官方 `docs/CONTRIBUTING.md` 第 9 节：**只交算子文件**，不需要 tests/benchmark/docs/`conf/operators.yaml`（维护方用留出 harness 复验），但 CLA、`pre-commit run --all-files`、以及 `import flaggems_sglang` 后 `all_registered_ops()` 能列出该算子必须成立。

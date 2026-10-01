@@ -8,7 +8,7 @@ description: 将 FlagOS 实验候选适配到官方多芯片契约，检查发�
 读取 [执行手册](../../../competition/WORKFLOW.md) 的比赛部分及本题 profile。题目支持芯片、入口和发布门槛独立维护，不固定为八款，不继承其他题目的数值目标。比赛有两条出口：平台 ZIP（评分）与上游仓库 PR（官方 `docs/CONTRIBUTING.md` 第 9 节的竞赛贡献规则）。
 
 1. `inspect --refresh` 保存官方公开契约证据。提交前通过 Chrome 确认当前任务、批次、登录团队、剩余额度、最近记录及重复包；公共 API 信息不代表提交授权。
-2. 从冻结实验用 `prepare` 建立独立适配目录。需要后端变化时编辑适配源码，再填 `release.json`。实验源码不变。
+2. 从冻结实验用 `prepare` 建立独立适配目录。需要后端变化时编辑适配源码，再填 `release.json`。实验源码不变。包成员是 `profile.json` 的 `package_members`：平台按后缀把芯片路由到 `<op>_<chip>.py`，没有专用文件才用 `<op>.py`（实测：Task 103 昆仑芯 generic 0.09× → 专用文件 1.85×）。清单声明少了会让未声明的专用文件**被静默丢掉**，所以 `new`/`prepare`/`package` 都会 fail closed；开工前用 `members --task taskNN --source PATH` 看每颗芯片由哪个文件服务、哪些芯片共用 generic（共用 generic 的芯片就是还没单独优化过的那些）。
 3. `check` 检查包、逐目标结构变化、源码/基线绑定、静态兼容性、独立审查、完整正确性和题目发布门槛。`--package-only` 只证明包有效，不能作为发布通过。缺失证据保持 blocked，不填造预测。
 4. 仅在会话已授权提交且完整检查通过后执行 Chrome 上传。上传前将 adaptation.json 写为 `upload_armed`，记录包哈希、任务/批次/团队标识、可见额度及时间；同目录 events.jsonl 追加事件。上传后立即记录平台 record_id 和 submitted 状态。
 5. 中断恢复先检查 Chrome 的最近记录；`upload_armed` 或更后不得盲目重复上传。包变化使原检查失效，必须重新检查。沿用超过 120 秒的提交间隔和当前可见额度限制。

@@ -9,6 +9,8 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+from competition import members
+
 ROOT = Path(__file__).resolve().parents[2]
 LOCAL = ROOT / "competition/.local"
 
@@ -56,7 +58,15 @@ def create(task, source, hypothesis, parent=None, seed=0, requirements=None):
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S") + "-" + uuid.uuid4().hex[:8]
     root = run_path(run_id)
     source = Path(source).resolve()
-    files = [source] if source.is_file() else [source / name for name in contract["package_members"] if (source / name).is_file()]
+    if source.is_file():
+        files = [source]
+        if source.name not in contract["package_members"]:
+            raise ValueError(f"{source.name} is not a declared package member")
+    else:
+        layout = members.audit(contract["operator"], source, contract["targets"], contract["package_members"])
+        if not layout["passed"]:
+            raise ValueError("package layout is inconsistent: " + "; ".join(layout["errors"]))
+        files = [source / name for name in contract["package_members"] if (source / name).is_file()]
     if not files or contract["operator"] + ".py" not in [p.name for p in files]:
         raise ValueError("source must include the public operator module")
     root.mkdir(parents=True)
