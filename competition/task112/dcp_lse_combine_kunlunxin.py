@@ -1,35 +1,39 @@
-"""Task 112 ``dcp_lse_combine``, Kunlunxin-specific module (revision 2).
+"""Task 112 ``dcp_lse_combine``, Kunlunxin-specific module (revision 3).
 
-Revision 1 was falsified: the flat 1-D grid, the shard-0 max seed and the
-explicit fp32 casts did **not** fix Kunlunxin (second official submission
-2026-10-01 23:01, ``adapt-e29585109e6e``: Kunlunxin Failed again while intl_a
-passed at 11.05x).
+Revision 3 is driven by the platform's **actual compiler error**, which the
+submission page exposes when the Kunlunxin ``Failed`` cell is clicked (13/13
+official cases, newest record 2026-10-01 23:04)::
 
-The stronger piece of evidence is the module that actually passed on Kunlunxin
-in Task 103 (``recompute_w_u_kunlunxin.py``): **every load and store in it is
-block-shaped** -- the offset is always ``program_id * BLOCK + tl.arange(...)``,
-never a bare scalar.  This module previously read each shard's LSE with a
-*scalar* ``tl.load(ptr + base + i * stride)``, which yields a 0-d value feeding
-``tl.maximum`` / ``tl.where`` / ``exp`` and finally a scalar store.  On a
-backend whose legalizer is known to reject mixed operand types
-(``arith.addi op requires the same type for all operands and results`` from the
-TritonXPULegalize pipeline in Task 103), scalar-versus-block mixing is the prime
-suspect, so this revision removes it entirely:
+    RuntimeError: PassManager::run failed: loc("<path>/dcp_lse_combine.py":45:0)
+      Pipeline failed while executing [TritonXPUUnrollControl on 'builtin.module']
+    OutOfResources: out of resource: uni_sram
+      Required: 0, Hardware limit: 0. Reducing block sizes or `num_stages` may help.
 
-* the shard LSE is read as a ``[1]`` block (``tl.arange(0, 1)``), so the running
-  max, the weights and the returned LSE are all block values;
-* the block widths are made explicit with ``tl.broadcast_to`` instead of
-  relying on implicit size-1 broadcasting between ``[1]`` and ``[D_BLOCK]``;
-* the running max is a typed ``tl.full([1], -inf, tl.float32)``, so no Python
-  float ever meets a tensor in ``tl.maximum``;
-* the flat 1-D grid and the single ``D_BLOCK`` fp32 accumulator are kept, so
-  the SRAM footprint stays minimal and no ``tl.dot`` exists;
-* the algorithm, strides, sanitize rule, constexpr ``is_lse_base_on_e`` split
-  and ``return_lse`` shape are unchanged, and the six targets that pass keep
-  the exact generic bytes that produced their scores.
+The observed failure is at compile time in ``TritonXPUUnrollControl`` across
+these 13 cases; this does not establish shape independence or SRAM exhaustion.
+A separately inspected FlagTree 0.7.0+xpu3.6 backend wraps any exception from
+``pm.run(mod, 'make_ttxir')`` as ``OutOfResources(0, 0, "uni_sram ...")``.
+That build has not been verified as the competition's compiler version.
+Revisions 1 and 2 retained ``tl.static_range`` in both passes.  Testing ordinary
+loops is therefore a hypothesis about compiler compatibility, not a diagnosed
+root cause or a locally verified IR transformation.
 
-Falsifier: Kunlunxin fails again, or scores below 0.1.  A pass would not prove
-this diagnosis either -- only that this shape compiles and is correct.
+Revision 3 changes one thing: both shard loops become plain ``range(N)`` loops
+(``N`` remains constexpr).  Accelerator compilation remains to be evaluated.
+Everything else is retained from revision 2 (flat 1-D grid, ``[1]`` block LSE
+accesses, explicit ``tl.broadcast_to``, one ``D_BLOCK`` accumulator, no
+``tl.dot``), and the six targets that pass keep the exact generic bytes that
+produced their scores.
+
+History, kept because both falsifications are evidence:
+
+* revision 1 (flat grid + shard-0 max seed + explicit fp32 casts) failed at
+  23:01 (``adapt-e29585109e6e``);
+* revision 2 (all-block accesses, explicit broadcasts) failed at 23:04
+  (``adapt-5218f1763fce``) -- and that run is what produced the error above.
+
+Falsifier: Kunlunxin fails again, or scores below 0.1.  If it fails, the next
+lever named by the error itself is block size / ``num_stages``.
 """
 
 from __future__ import annotations
@@ -76,7 +80,7 @@ def _dcp_lse_combine_kunlunxin_kernel(
 
     # Pass 1: the shard max over a [1] block; NaN / +inf become -inf.
     lse_max = tl.full([1], float("-inf"), dtype=tl.float32)
-    for i in tl.static_range(N):
+    for i in range(N):
         value = tl.load(recv_lse_ptr + lse_base + i * l_stride_n).to(
             tl.float32
         )
@@ -91,7 +95,7 @@ def _dcp_lse_combine_kunlunxin_kernel(
     # Pass 2: weights and the weighted sum, accumulated in fp32.
     weight_sum = tl.zeros([1], dtype=tl.float32)
     acc = tl.zeros([D_BLOCK], dtype=tl.float32)
-    for i in tl.static_range(N):
+    for i in range(N):
         value = tl.load(recv_lse_ptr + lse_base + i * l_stride_n).to(
             tl.float32
         )
