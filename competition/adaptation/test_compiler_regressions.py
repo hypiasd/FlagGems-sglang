@@ -123,3 +123,79 @@ def concat_and_cast_mha_k(out, dn):
             "concat_and_cast_mha_k_iluvatar.py",
         )
         self.assertIn("autotune-tile-grid-mismatch", {item["kind"] for item in report["blockers"]})
+
+
+class PackageTorchRuleRegression(unittest.TestCase):
+    """One anti-cheat rule lives in two places; they had drifted.
+
+    ``task111/test_task.py`` allows ``torch.tensor`` when its first argument is a
+    literal list (the stride metadata buffer) and rejects anything computed from
+    a tensor.  ``packaging.validate_package`` still carried the pre-tightening
+    allowlist, which rejected every task111 candidate -- including ones the task
+    itself permits -- so no task111 submission was possible at all.  These tests
+    pin both halves of the rule so the copies cannot drift again.
+    """
+
+    OPERATOR = "conv_window_scatter_with_mask"
+    CONTRACT = {
+        "operator": OPERATOR,
+        "entrypoint": "conv_window_scatter_with_mask(dst, src, dst_indices_raw, step_indices_raw)",
+        "targets": ["iluvatar"],
+        "package_members": ["conv_window_scatter_with_mask.py"],
+    }
+
+    def check(self, body: str):
+        from competition.adaptation.packaging import make_package, validate_package
+
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory)
+            name = "conv_window_scatter_with_mask.py"
+            (source / name).write_text(
+                "import torch\n"
+                "import triton\n"
+                "import triton.language as tl\n\n"
+                "@triton.jit\n"
+                "def _k(ptr, N: tl.constexpr):\n"
+                "    tl.store(ptr, tl.load(ptr) + N)\n\n"
+                "def conv_window_scatter_with_mask(dst, src, dst_indices_raw, step_indices_raw):\n"
+                f"    {body}\n"
+                "    return out\n"
+            )
+            archive = source / "package.zip"
+            make_package(source, archive, self.CONTRACT)
+            return validate_package(source, archive, self.CONTRACT)
+
+    def test_literal_metadata_tensor_is_allowed(self) -> None:
+        report = self.check(
+            "out = torch.empty_like(dst)\n"
+            "    tail = torch.tensor([dst.stride(0), src.stride(4)], dtype=torch.int32)"
+        )
+        self.assertTrue(report["passed"], report["errors"])
+
+    def test_tensor_built_from_a_tensor_is_rejected(self) -> None:
+        report = self.check("out = torch.empty_like(dst)\n    tail = torch.tensor(dst.stride())")
+        self.assertFalse(report["passed"])
+        self.assertTrue(
+            any("literal metadata buffer" in error for error in report["errors"]),
+            report["errors"],
+        )
+
+    def test_other_torch_compute_is_still_rejected(self) -> None:
+        report = self.check("out = torch.zeros(dst.shape)")
+        self.assertFalse(report["passed"])
+        self.assertTrue(
+            any("native torch compute call" in error for error in report["errors"]),
+            report["errors"],
+        )
+
+    def test_scanner_only_sees_the_torch_namespace(self) -> None:
+        """Known scope limit, asserted so it is visible rather than assumed away.
+
+        The rule matches ``torch.<attr>(...)``; compute reached through a tensor
+        *method* (``dst.clone()``, ``src.to(...)``) is not matched, which is why
+        the reference-shaped implementation is caught by the structural-delta
+        gate instead.  Tightening it is a deliberate separate change: it would
+        also affect packages that legitimately call tensor methods.
+        """
+        report = self.check("out = dst.clone()")
+        self.assertTrue(report["passed"], report["errors"])
