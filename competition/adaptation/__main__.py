@@ -11,7 +11,7 @@ import urllib.request
 from pathlib import Path
 from competition.experiments import store
 from .compiler_scan import inspect_source
-from .ledger import record, summary
+from .ledger import record, summary, target_ledger
 from .packaging import make_package, validate_package
 from .structure import normalized_ast
 
@@ -117,13 +117,13 @@ def main(argv=None):
     p = sub.add_parser("prepare"); p.add_argument("--run", required=True); p.add_argument("--baseline", type=Path)
     p = sub.add_parser("check"); p.add_argument("--adaptation", required=True); p.add_argument("--package-only", action="store_true")
     p = sub.add_parser("record"); p.add_argument("--task", required=True); p.add_argument("--input", type=Path, required=True)
-    p = sub.add_parser("report"); p.add_argument("--task", required=True)
+    p = sub.add_parser("report"); p.add_argument("--task", required=True); p.add_argument("--targets", action="store_true")
     args = parser.parse_args(argv)
     try:
         if args.command == "inspect": result = inspect(args.task, args.refresh)
         elif args.command == "prepare": result = prepare(args.run, args.baseline)
         elif args.command == "record": result = record(args.task, store.load_json(args.input))
-        elif args.command == "report": result = summary(args.task)
+        elif args.command == "report": result = target_ledger(args.task) if args.targets else summary(args.task)
         else:
             if not args.adaptation.startswith("adapt-") or not args.adaptation[6:].isalnum():
                 raise ValueError("invalid adaptation ID")

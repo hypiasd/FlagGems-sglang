@@ -155,9 +155,19 @@ KernelGen 的 MCP 工具对本项目不可用（专精知识库只有华为，�
 
 ```sh
 python -m competition.adaptation record --task task78 --input OFFICIAL_OBSERVATION_JSON
+python -m competition.adaptation report --task taskNN --targets
 python -m competition.task78.official_history verify
 ```
 
 观察 JSON 包含 `record_id`、`submitted_at`、`status`、`evidence_class: official-platform`、真实 `evidence`、`local_archive_sha256`、完整 `targets`（status/speedup/已知 source_sha256）、`pass_count` 和官方 `aggregate_speedup`。缺失结果留 pending/evaluating，未知摘要不编造；部分目标通过时聚合为空。异常排除用 `excluded` 和证据说明，原观察保留。
+
+**逐目标账本（`report --targets`）**：聚合最优只回答"哪个包总分最高"，不回答"这颗芯片的最佳值出现在哪个包"。逐目标账本对每颗芯片给出：
+
+- `best_eligible`（只在**全部目标通过**的包中取最优）与 `best_observed`（含未合格包的观测）——两者不同说明某个更好的观测来自一个整体不合格的包；
+- `source_versions`：该芯片在该题历史上出现过几个不同的源码；**只有 1 个版本而数值仍在动，就是平台重复测量的抖动，不是版本变差**；
+- `delta_vs_best_eligible` 与 `verdict`：`at_or_above_best` / `below_best_same_source`（源码字节相同，属复测）/ `below_best_changed_source`（真的换了版本）；
+- `resolution` 与 `repeated_observations`：同一份源码被重复观测到的相对极差，即这颗芯片在平台上的分辨力（Task 103 实测：ascend 13.9%、hygon 2.3%、metax 1.4%）。
+
+`limitation` 必须一并阅读：每个包对每颗芯片只有**一次**观测，且极差由被比较的那批观测自身算出，所以 `below_best_same_source` 的含义是"与复测不可区分"，**不是**"没有回退"。
 
 历史 `results.jsonl` 不改写；新观察追加 `official-records.jsonl`，重复同一内容幂等，评测中的记录可同包追加修订，终态冲突被拒绝。Task 78 历史校验会解析原路径、tracked archive 和本地私有备份，核对 25 条结果的包/源码摘要。完整原始官方账本仍是成绩事实源。
