@@ -188,3 +188,40 @@ python -m competition.task78.official_history verify
 `limitation` 必须一并阅读：每个包对每颗芯片只有**一次**观测，且极差由被比较的那批观测自身算出，所以 `below_best_same_source` 的含义是"与复测不可区分"，**不是**"没有回退"。
 
 历史 `results.jsonl` 不改写；新观察追加 `official-records.jsonl`，重复同一内容幂等，评测中的记录可同包追加修订，终态冲突被拒绝。Task 78 历史校验会解析原路径、tracked archive 和本地私有备份，核对 25 条结果的包/源码摘要。完整原始官方账本仍是成绩事实源。
+
+### 结果驱动的调整（`decide`）
+
+**先要知道分数怎么算：官方聚合 = 各目标 speedup 的算术平均**（用 Task 103 全部合格记录逐条核验，最大残差 <0.005）。因此把一颗芯片提高 Δ，总分增量是 **Δ / 目标数**，优先级必须按**绝对增量**排，而不是按相对提升——一颗 0.89× 但有余量的芯片，价值远高于一颗 18.46× 且已到顶的芯片。
+
+```sh
+python -m competition.adaptation decide --task taskNN
+python -m competition.adaptation decide --task taskNN --next-package
+```
+
+每颗芯片给出：`value`（最近合格值）、`anchors`（参照锚）、`reference` + `reference_kind`、`headroom`、`marginal_aggregate_gain_upper_bound`，以及 `action`：
+
+| action | 含义 |
+|---|---|
+| `blocked_no_eligible_result` | 还没有合格观测 |
+| `rework_below_baseline` | **低于 1.0，比参考实现还慢**（缺陷，最高优先） |
+| `rework_behind_reference` | 落后参照超过 10% |
+| `rework_under_served` | 低于同期中位数的一半 |
+| `hold_re_measure` | 源码没变、差异落在复测范围内，不追 |
+| `keep` | 已到参照水平 |
+
+**参照取四个锚的最大值**——缺任一个都会失真：
+
+| 锚 | 看得到什么 | 盲区 |
+|---|---|---|
+| `best_eligible_ever` | 已达成过的最好值 | 一直很差的芯片看起来"没有余量" |
+| `provisional_observation` | 评测中的观测（存在性证明） | 会被修订 |
+| `peer_median` | 同一包里其它芯片的中位表现 | 只是同期横向对比 |
+| `baseline_parity`（1.0） | 低于它就是比参考实现还慢 | 只是地板 |
+
+**硬规则**：低于 1.0 的目标**不因"落在复测波动内"而豁免**——那是缺陷，不是噪声。
+
+`--next-package` 给出可执行的**沿用计划**（carry-forward）：每颗芯片该沿用哪个文件、来自哪个 adaptation、依据哪条官方记录。规则是**除新假设明确指名要改的芯片外，一律沿用产出该芯片最佳值的文件字节**——不再整包手工重挑。
+
+`headroom` 与 `marginal_aggregate_gain_upper_bound` 都是**上界**，不是预测：估算一次只动一颗芯片，而平台一次给整包打分。
+
+Task 103 当前输出：`iluvatar`（0.17，+0.47）→ `intl_a`（0.89，+0.36）→ `kunlunxin`（1.85，+0.23）→ `metax`（4.98，+0.18），上界合计 +1.24；其余 `hold_re_measure` / `keep`。

@@ -10,6 +10,7 @@ import uuid
 import urllib.request
 from pathlib import Path
 from competition.experiments import store
+from competition import decide
 from competition import members
 from .compiler_scan import inspect_source
 from .ledger import record, summary, target_ledger
@@ -139,6 +140,21 @@ def members_command(task, source=None, adaptation=None):
     return result
 
 
+def decide_command(task, next_package=False):
+    """Report how the official results should change the next package."""
+    result = decide.diagnose(task, store.LOCAL)
+    if next_package:
+        return {
+            "task_id": task,
+            "rework_targets": result["rework_targets"],
+            "rework_aggregate_gain_upper_bound": result["rework_aggregate_gain_upper_bound"],
+            "next_package": result["next_package"],
+            "reuse_rule": result["reuse_rule"],
+            "limitation": result["limitation"],
+        }
+    return result
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -147,6 +163,9 @@ def main(argv=None):
     p = sub.add_parser("check"); p.add_argument("--adaptation", required=True); p.add_argument("--package-only", action="store_true")
     p = sub.add_parser("record"); p.add_argument("--task", required=True); p.add_argument("--input", type=Path, required=True)
     p = sub.add_parser("report"); p.add_argument("--task", required=True); p.add_argument("--targets", action="store_true")
+    p = sub.add_parser("decide")
+    p.add_argument("--task", required=True)
+    p.add_argument("--next-package", action="store_true")
     p = sub.add_parser("members")
     p.add_argument("--task", required=True)
     p.add_argument("--source", type=Path)
@@ -159,6 +178,8 @@ def main(argv=None):
         elif args.command == "report": result = target_ledger(args.task) if args.targets else summary(args.task)
         elif args.command == "members":
             result = members_command(args.task, args.source, args.adaptation)
+        elif args.command == "decide":
+            result = decide_command(args.task, args.next_package)
         else:
             if not args.adaptation.startswith("adapt-") or not args.adaptation[6:].isalnum():
                 raise ValueError("invalid adaptation ID")
