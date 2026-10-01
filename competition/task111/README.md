@@ -130,3 +130,34 @@ G 把 13 个 stride 标量放进一个按 `(shape, strides, dtype, device)` 缓�
 
 **还剩什么**：入口里可动的只剩 ~2 µs（位置传参已被拿走），大形状 3.59× 是 `clone()` 语义的流量地板。唯一的结构性杠杆仍是绕过 Triton 公开派发；这次真的试了 `warmup()` + `CompiledKernel[grid]`，在本机 Triton 3.6 上无法启动（`IndexError: tuple index out of range`，补成 3 元 grid 后是 `TypeError: function takes exactly 27 arguments (19 given)`）。**明确不采用**：本题要跑七家厂商的 Triton 分支，私有路径在 CUDA 上可行、在别家可能直接启动失败，等于拿非目标设备的微秒去赌真正的闸门。
 
+## K 版（当前候选）：跳过 Triton 每调用的派发记账，10 例平均 6.77× → 11.59×
+
+公开路径 `JITFunction.run` 每次调用都要重做：参数绑定（binder）、特化 + `compute_cache_key`、kernel cache 查找、`used_global_vals` 失效检查，然后才落到 `kernel.run(...)`。这些记账与张量无关，只是"每次都重新算一遍"。K 版在**第一次调用时捕获 `kernel[grid](...)` 返回的 CompiledKernel**，此后按 `JITFunction.run` 的**同一份调用形式**直接发射：
+
+```python
+kernel.run(grid_0, grid_1, grid_2, stream, kernel.function, kernel.packed_metadata,
+           kernel.launch_metadata(grid, stream, *args),
+           knobs.runtime.launch_enter_hook, knobs.runtime.launch_exit_hook, *args)
+```
+
+`args` 是 6 个指针 + 6 个 constexpr，顺序与签名一致；grid 归一化、hooks、stream 取法与公开路径逐字一致。小形状入口 **29.1 → 17.46 µs**（交替顺序 11 次，中位数）。
+
+**10 例 confirm 模式（5×100 ms，cap 4096，非目标 T4）**：
+
+| | G | **K** |
+|---|---:|---:|
+| 平均 speedup | 6.77× | **11.59×（+71%）** |
+| 小形状例（7 个） | 7.67–7.89× | **13.35–14.83×** |
+| padded（同形状异 strides） | 7.77× | 14.83× |
+| all-invalid | 1.87× | 3.01× |
+| 大形状 2.1M 元素 | 3.38× | 3.48×（设备受限，不变） |
+
+10 例全对（首调 + 二次调用都验），T4 完整矩阵 `passed`、负控通过；本地 18 条单测 rc=0、10/10 语义例、8 条对照全部按预期。
+
+**可移植性不是嘴上说的，是对着真轮子核过的**：用 HTTP Range 直接从 `resource.flagos.net` 的索引里抽出 FlagTree 0.6.1 wheel 内的 `triton/runtime/jit.py`（不下载 371 MB–3.3 GB 整包），逐个比对 `plain / iluvatar3.6 / metax3.6 / ascend3.5` 四个轮子——**调用形式完全相同**，唯一差异是 FlagTree 自己加的 `*dist_param`，且它由环境变量 `FLAGTREE_LITE_DIST`（默认未设）与 lite 模式共同决定，K 版把它原样镜像。因此"同一份调用形式对七个芯片通用"是**查证过的事实**，不是推断。
+
+**安全网（本文件禁止任何 `try`，行 212-214 的静态检查会拒绝）**：所有能力探测都用 `getattr`，不用异常。缺 `function`/`packed_metadata`/`launch_metadata`/`run`，或取不到 driver 与 hooks，则计划**永久回落到公开路径**；CPU 语义模型下正是这条回落路径在工作（`triton.runtime.driver` 不在 `sys.modules`），所以 K 版仍可被语义回路验证。stream 每次调用重新取（多流安全），hooks 取自 `triton.knobs`，与公开路径同源。
+
+**注意这里优化的是什么**：算子和数学语义一字未改，省掉的是宿主端每调用的派发记账。大赛反作弊条款针对"核心计算必须 Triton/Triton-TLE、不得有 torch 回退"，K 版走的仍是 Triton 自己的发射路径，没有 torch 回退、没有设备分支。
+
+

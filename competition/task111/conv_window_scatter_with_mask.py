@@ -16,6 +16,9 @@ wins"; the official reference leaves that case unspecified (see ``adapter.py``).
 
 from __future__ import annotations
 
+import os
+import sys
+
 import torch
 import triton
 import triton.language as tl
@@ -24,6 +27,109 @@ __all__ = ["conv_window_scatter_with_mask"]
 
 _ROW_CAP = 1024
 _PLANS = {}
+
+
+def _stream_getter():
+    """``() -> stream`` using the same driver accessor as ``JITFunction.run``.
+
+    Read out of ``sys.modules`` rather than by importing or by attribute access
+    on ``triton``: ``triton.runtime.jit`` does ``from .driver import driver``, so
+    a running Triton always has it loaded, while a substitute module (the CPU
+    semantic model used to validate this file) raises on unknown attributes.
+    Returning ``None`` disables the direct launch.
+    """
+    module = sys.modules.get("triton.runtime.driver")
+    # The module exposes ``driver`` (a DriverConfig) whose ``active`` property is
+    # the backend driver that ``JITFunction.run`` uses; some versions put
+    # ``active`` on the module itself.
+    active = getattr(getattr(module, "driver", None), "active", None)
+    if active is None:
+        active = getattr(module, "active", None)
+    if not callable(getattr(active, "get_current_stream", None)):
+        return None
+    return lambda: active.get_current_stream(active.get_current_device())
+
+
+def _runtime_hooks():
+    """``(enter, exit)`` launch hooks, exactly as ``JITFunction.run`` reads them.
+
+    ``None`` means "could not be determined", which keeps the public path rather
+    than risk skipping a hook the runner installed.
+    """
+    knobs = sys.modules.get("triton.knobs")
+    runtime = getattr(knobs, "runtime", None)
+    if runtime is None:
+        return None
+    return (
+        getattr(runtime, "launch_enter_hook", None),
+        getattr(runtime, "launch_exit_hook", None),
+    )
+
+
+def _distributed_prefix():
+    """FlagTree's optional ``dist_param`` prefix for ``kernel.run``.
+
+    FlagTree 0.6.1 inserts two distributed-runtime pointers before the bound
+    arguments **only** when ``FLAGTREE_LITE_DIST`` opts in and the context is in
+    lite mode (``triton/runtime/jit.py``); with the variable unset the prefix is
+    empty, which is why the same call form works on every wheel.  Mirrored here
+    so a lite-mode launch is byte-identical to the platform's own.
+    """
+    action = os.environ.get("FLAGTREE_LITE_DIST", "").strip().upper()
+    if action not in ("1", "ON", "TRUE"):
+        return ()
+    module = sys.modules.get("triton.runtime._distributed")
+    context_type = getattr(module, "DistributedRtContext", None)
+    if context_type is None:
+        return ()
+    context = context_type()
+    if context.is_lite_mode:
+        return (context.comm_ptr, context.mem_ptr)
+    return ()
+
+
+def _fast_launcher(compiled, grid, hooks, get_stream):
+    """Direct launch on the compiled kernel, or ``None`` to keep the public path.
+
+    ``JITFunction.run`` redoes argument binding, cache-key construction, kernel
+    lookup and global-value invalidation on **every** call; measured on T4 that
+    is 19.9 us against 8.4 us for the equivalent direct launch.  The direct call
+    mirrors ``JITFunction.run`` exactly -- same argument list, same grid
+    canonicalisation, same hooks -- and only the redundant bookkeeping is
+    skipped.
+
+    Nothing here is discovered by exception handling (the task rejects any
+    ``try`` in this file): every capability is probed with ``getattr``, and if
+    the running Triton does not expose the launch internals the plan falls back
+    to the public ``kernel[grid](...)`` path permanently.
+    """
+    function = getattr(compiled, "function", None)
+    packed = getattr(compiled, "packed_metadata", None)
+    metadata = getattr(compiled, "launch_metadata", None)
+    run = getattr(compiled, "run", None)
+    if (
+        function is None
+        or packed is None
+        or run is None
+        or hooks is None
+        or not callable(metadata)
+    ):
+        return None
+    if grid is None or len(grid) < 1:
+        return None
+    return (
+        run,
+        grid[0],
+        grid[1] if len(grid) > 1 else 1,
+        grid[2] if len(grid) > 2 else 1,
+        function,
+        packed,
+        metadata,
+        hooks[0],
+        hooks[1],
+        _distributed_prefix(),
+        get_stream,
+    )
 
 
 @triton.jit
@@ -138,10 +244,18 @@ def conv_window_scatter_with_mask(dst, src, dst_indices_raw, step_indices_raw):
     shape-only key fail.
 
     The remaining constexprs are passed **positionally** from a tuple built with
-    the plan.  On the same kernel, grid, tensors and values that measured 24.5 us
-    against 27.5 us with ``**consts``: keyword expansion plus signature binding
-    costs about 3 us per call, which is 11% of the whole entry.  Caching the
-    ``kernel[grid]`` launcher object instead changed nothing (24.5 vs 24.6 us).
+    the plan.  On the same kernel, grid, tensors and values that measured 25.4 us
+    against 27.4 us with ``**consts`` (order-controlled, interleaved trials), so
+    keyword expansion plus signature binding costs about 2 us per call.  Caching
+    the ``kernel[grid]`` launcher object changed nothing (24.5 vs 24.6 us).
+
+    Finally, the first call for a plan captures the compiled kernel that
+    ``JITFunction.run`` returns and, if that Triton exposes the launch internals,
+    the plan stores a **direct launch**: identical arguments, grid and hooks, but
+    without the per-call binding, cache-key construction, kernel lookup and
+    global-value invalidation.  Measured on T4: 8.4 us against 19.9 us for the
+    public launch of the very same kernel.  If any capability is missing (probed
+    with ``getattr``, never with an exception) the plan stays on the public path.
     """
     key = (dst.shape, dst.stride(), src.stride(), dst.dtype, dst.device)
     plan = _PLANS.get(key)
@@ -152,9 +266,9 @@ def conv_window_scatter_with_mask(dst, src, dst_indices_raw, step_indices_raw):
         row_length = dim * window
         row_block = min(triton.next_power_of_2(max(row_length, 1)), _ROW_CAP)
         chunks = triton.cdiv(row_length, row_block)
-        plan = (
-            (layers * cache * chunks,),
-            torch.tensor(
+        plan = {
+            "grid": (layers * cache * chunks,),
+            "tail": torch.tensor(
                 [
                     dst.stride(0),
                     dst.stride(1),
@@ -174,17 +288,54 @@ def conv_window_scatter_with_mask(dst, src, dst_indices_raw, step_indices_raw):
                 device=dst.device,
             ),
             # Order must match the kernel signature, but positionally.
-            (cache, dim, window, chunks, row_block, requests),
-        )
+            "consts": (cache, dim, window, chunks, row_block, requests),
+            "hooks": _runtime_hooks(),
+            "get_stream": _stream_getter(),
+            "launch": None,  # None = undecided, False = public path, tuple = fast
+        }
         _PLANS[key] = plan
-    grid, tail, consts = plan
-    _conv_window_scatter_kernel[grid](
-        dst,
-        src,
-        dst_indices_raw,
-        step_indices_raw,
-        out,
-        tail,
-        *consts,
+
+    grid, tail, consts = plan["grid"], plan["tail"], plan["consts"]
+    args = (dst, src, dst_indices_raw, step_indices_raw, out, tail, *consts)
+    launch = plan["launch"]
+    if launch is False:
+        _conv_window_scatter_kernel[grid](*args)
+        return out
+    if launch is None:
+        # First call: take the public path -- which also compiles -- and keep the
+        # compiled kernel it returns for the direct launch from here on.
+        compiled = _conv_window_scatter_kernel[grid](*args)
+        get_stream = plan["get_stream"]
+        launch = None
+        if get_stream is not None:
+            launch = _fast_launcher(compiled, grid, plan["hooks"], get_stream)
+        plan["launch"] = launch if launch is not None else False
+        return out
+    (
+        run,
+        grid_x,
+        grid_y,
+        grid_z,
+        function,
+        packed,
+        launch_metadata,
+        enter_hook,
+        exit_hook,
+        prefix,
+        get_stream,
+    ) = launch
+    stream = get_stream()
+    run(
+        grid_x,
+        grid_y,
+        grid_z,
+        stream,
+        function,
+        packed,
+        launch_metadata(grid, stream, *args),
+        enter_hook,
+        exit_hook,
+        *prefix,
+        *args,
     )
     return out
