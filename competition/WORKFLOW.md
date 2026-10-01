@@ -114,6 +114,23 @@ python -m competition.adaptation report --task task78
 
 `check` 重建包，检查结构差异、哈希、兼容性、完整正确性、审查和本题收益门槛，记录 `ready` / `blocked` / `package_checked`。只改常量或注释不算结构变化。后端新变更应建立新的适配快照；不得把 T4 的加速比回填为官方成绩。
 
+### 上游仓库 PR（第二条提交通道）
+
+平台 ZIP 和上游仓库是两套契约。平台要一个含 `<op>.py` 与 `<op>_<chip>.py` 的压缩包，在自己的 harness 上评分；[flagos-ai/FlagGems-sglang](https://github.com/flagos-ai/FlagGems-sglang) 要同样的源码放进 dispatcher 树，带 Apache 2.0 头和 `__all__`，并通过 `basic-ci.yml`。竞赛规则是官方 `docs/CONTRIBUTING.md` 第 9 节：**只交算子文件**，不需要 tests/benchmark/docs/`conf/operators.yaml`（维护方用留出 harness 复验），但 CLA、`pre-commit run --all-files`、以及 `import flaggems_sglang` 后 `all_registered_ops()` 能列出该算子必须成立。
+
+```sh
+python -m competition.pr rules
+python -m competition.pr plan --task task103 --adaptation ADAPT_ID
+python -m competition.pr bundle --task task103 --adaptation ADAPT_ID --rename O=out_ptr
+python -m competition.pr materialize --task task103 --adaptation ADAPT_ID
+python -m competition.pr check --task task103 --adaptation ADAPT_ID
+```
+
+- `bundle` 把获奖源码重排进 `.local/pr/<task>/<adaptation>/`：加 Apache 头、补 `__all__ = ["<op>"]`、用官方同版本 isort+black 格式化、把超长注释/模块 docstring 折进 flake8 的 120 列、按 `--rename` 做 token 级改名（flake8 E741 等）。每一处非源码改动都记进 `bundle.json`，并在 PR 描述里逐条披露；原始获奖文件另存 `awarded/` 供比对。
+- `materialize` 用 `git archive upstream/master` 展开官方树并把 bundle 文件复制进去；`check` 依次跑 structure、hygiene、ast_preservation（获奖实现的 AST 除声明过的改名外必须一致）、style（black / isort / flake8）、官方 `tools/ci_checks`（竞赛 PR 不适用的检查显式标为 out of scope）和 import smoke。
+- `check` 的结论只是“本地可跑的闸门全过”，**不是**“可以合并”；未跑的闸门必须在上游 CI 上补齐。`import_smoke` 需要 torch+triton，本机通常 `unavailable`，此时会打印在设备上执行的确切命令，不得声称注册已通过。
+- 样式工具在 `competition/.local/venv-pr/`（black 24.8.0 / isort 5.12.0 / flake8 7.1.0，与 `basic-ci.yml` 同版本）；可用 `--tools` 指向其他 bin 目录。没有工具时 style 闸门报 `unavailable`，不会假装通过。
+
 ### Chrome 提交与恢复
 
 本轮不上传。后续按已获用户授权和 flagos-adaptation skill：Chrome 确认题目/批次、团队、可见额度、最近提交和重复包，复核最新 check 与源码/包哈希；相邻提交至少间隔 120 秒。单次上传前记录 `upload_armed`、包哈希和 preflight 到适配事件。若上传期间被打断，先查 Chrome 官方记录，再决定关联既有记录或重试，避免重复上传。共享文档不保存账号、Cookie 或密钥。
