@@ -68,6 +68,7 @@ competition/.local/.venv-cpu/bin/python competition/task112/validate_cpu.py --ve
 | `20261001T134448-d77aa81e`（parent 上一条） | `b8a84e2d…` | `db712e60…` | 去掉 `program_id` 的 int64 提升与 `return_lse=False` 时的无用分配后语义不变 |
 | `20261001T135028-3810bb88`（parent 上一条） | `4d6c9d8c…` | `a75ba0ea…` | 每 program 处理 `PAIRS` 个 `(b,h)` 位置可把 program 数降 70%，且逐位一致 |
 | `20261001T135708-0bb18ad8`（parent 上一条） | `32a95b0f…` | `349242de…` | 把 position 轴折进 block（`[PAIRS, D_BLOCK]` 宽载入）可按 `PAIRS` 倍减少位置级访存指令数，且逐位一致 |
+| `20261001T141254-4ad3ec2b`（parent 上一条） | `404bf4e1…` | `e9f4e870…` | 在线单遍（running max + 重缩放）消掉第一遍 max，访存指令再降到 `2N+1`，代价是每 shard 两个 `exp` 与串行依赖 |
 
 ### 结构变体：每 program 多个 `(b,h)`
 
@@ -109,6 +110,24 @@ competition/.local/.venv-cpu/bin/python competition/task112/validate_cpu.py --ve
 
 即 `vec` 只花种子 17.5% 的位置级访存指令，`pairs` 用 30% 的 program 跑同样的指令数。`PAIRS = 1024/D`（上限 16）是为了把 `PAIRS*D_BLOCK` 个 fp32 累加器压到约 4 KiB 的猜测值，同样待设备扫参；2-D 索引算术、向量归约与寄存器压力都可能吃掉收益。**设备上无提速即否证。**
 
+### 结构变体三：在线单遍合并
+
+候选在 `competition/.local/candidates/task112-online/`。前两个变体都在改**访存**；这个变体改**遍数**：用 running max 加标准重缩放
+
+```
+m' = max(m, lse_i);  s = s*exp(m-m') + exp(lse_i-m');  a = a*exp(m-m') + exp(lse_i-m')*partial_i
+```
+
+把第一遍求 max 整个消掉，每 program 访存指令从 `3N+1` 降到 `2N+1`。代价是**算术与依赖**：每 shard 两个 `exp` 加两个 select，而且第 i 个 shard 的累加器依赖第 i−1 个的 max（前三个变体没有这个循环依赖）。
+
+| | 位置级访存指令（10 例表） | 超越函数次数 | 循环依赖 |
+|---|---:|---:|---|
+| 种子 / `pairs` | 12482 | 3610 | 无 |
+| `vec` | 2182 | 3610 | 无 |
+| `online` | **1542（12.4%）** | **7220（×2）** | 有 |
+
+两个 select 专门处理 `m` 还是 `-inf` 的时刻——那里 `exp(-inf - -inf)` 是 NaN，会毒化累加器。**它们确实被用例覆盖**：`n4-dead-shard` 让 shard 0 死亡，于是第一次迭代就在 `m == -inf` 下运行；删掉任一 select 都会在该用例失败（两条否证对照已验证）。唯一**只靠代数论证、未经验证**的是"所有 shard 都死"的位置：harness 的容差比对没有 NaN 相等模式，期望值是 NaN 的用例断言不了，而题面声明用例里不存在这种位置。
+
 ### CPU 回路这一轮抓到的四个错误（都已修复或作为否证保留）
 
 1. **NaN/+inf 净化缺失** → `n4-dead-shard.out` 失败（否证 A）。
@@ -120,11 +139,11 @@ competition/.local/.venv-cpu/bin/python competition/task112/validate_cpu.py --ve
 
 - **目标芯片正确性、设备行为与任何性能数据**：CPU 语义模型明确不提供这些（`LIMIT` 行每次都打印），租用设备仍不可达（`doctor --device t4` → `SSH scratch creation failed`）。
 - **官方用例集与 baseline 包**：平台不公开；本表的形状/容差来源是其"参考"而非官方判定。
-- **性能**：全部 program 数/指令数都是**结构性计数**，不是速度。当前种子候选仍是 baseline 同构起点（未换成任何变体），两个变体都只有 CPU 语义证据。
+- **性能**：全部 program 数/指令数都是**结构性计数**，不是速度。当前候选 `dcp_lse_combine.py` 仍是 baseline 同构起点（没有换成任何变体），三个变体都只有 CPU 语义证据——`online` 尤其分不清：它同时减少访存、增加超越函数、引入循环依赖，方向相反的三种效应只能在设备上分辨。
 
 ## 下一步
 
-1. 设备扫参（一旦有设备）：`pairs`/`vec` × `PAIRS ∈ {1,2,4,8,16}` × 公开形状表 × 两个 `is_lse_base_on_e` 值，判定变体是否真的更快；`vec` 的关键观测量是寄存器溢出/占用率拐点，`pairs` 的关键观测量是 program 粒度带来的调度收益；
+1. 设备扫参（一旦有设备）：`pairs`/`vec`/`online` × `PAIRS ∈ {1,2,4,8,16}` × 公开形状表 × 两个 `is_lse_base_on_e` 值，判定变体是否真的更快；`vec` 的关键观测量是寄存器溢出/占用率拐点，`pairs` 的关键观测量是 program 粒度带来的调度收益，`online` 的关键观测量是访存减少能否盖过翻倍的超越函数与循环依赖；
 2. 无设备时继续做语义安全的结构改动，每次改动新建 run 并重跑 `validate_cpu`（含**会失败的**否证对照），结构收益按上表的算术口径记账；
 3. 真正的性能判定仍需要设备或平台评测：租用设备需要新的隧道端点，平台评测需要用户在批次/团队范围内的显式授权；提交 Task 112 仍需用户显式授权。
 
