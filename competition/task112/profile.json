@@ -1,0 +1,48 @@
+{
+  "schema_version": 2,
+  "task_id": "task112",
+  "operator": "dcp_lse_combine",
+  "entrypoint": "dcp_lse_combine(recv_output, recv_lse, is_lse_base_on_e, return_lse)",
+  "package_members": [
+    "dcp_lse_combine.py"
+  ],
+  "targets": [
+    "iluvatar",
+    "metax",
+    "hygon",
+    "kunlunxin",
+    "ascend",
+    "intl_a",
+    "intl_b"
+  ],
+  "target_labels": {},
+  "contract_source": {
+    "kind": "official-api",
+    "url": "https://flagos.io/flagos/api/v1/races/782kzq4m/operator-tasks/dcp_lse_combine",
+    "verified_at": "2026-10-01"
+  },
+  "case_coverage": "development-assumptions",
+  "official_cases_complete": false,
+  "hardware_requirements": {},
+  "publication_policy": null,
+  "review_policy": {
+    "independent_reviews": 2
+  },
+  "structural_delta_required": true,
+  "core_computation": "triton-only",
+  "dtype": {
+    "recv_output": "bf16",
+    "recv_lse": "fp32"
+  },
+  "tolerance": {
+    "output_bf16": {
+      "atol": 0.015,
+      "rtol": 0.015
+    },
+    "lse_fp32": {
+      "atol": 0.0001,
+      "rtol": 0.0001
+    }
+  },
+  "scope": "N-way LSE-weighted combine of partial attention outputs: m = amax_i lse[i]; NaN or +inf shards are replaced by -inf and contribute nothing; if every shard is -inf then m is forced to 0; w = exp(lse - m) or exp2(lse - m) when is_lse_base_on_e is False; out = sum_i w_i * output[i] / sum_i w_i in fp32, cast back to recv_output.dtype; out_lse = (log(sum_i w_i) + m) in recv_lse.dtype, or None when return_lse is False"
+}
