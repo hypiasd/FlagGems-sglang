@@ -62,8 +62,33 @@ competition/.local/.venv-cpu/bin/python competition/task112/validate_cpu.py --ve
 |---|---|---|---|
 | `20261001T133618-4388ba8b` | `64fe04f9…` | 编辑前版本 | baseline 同构两遍实现可复现官方语义 |
 | `20261001T134448-d77aa81e`（parent 上一条） | `b8a84e2d…` | `db712e60…` | 去掉 `program_id` 的 int64 提升与 `return_lse=False` 时的无用分配后语义不变 |
+| `20261001T135028-3810bb88`（parent 上一条） | `4d6c9d8c…` | `a75ba0ea…` | 每 program 处理 `PAIRS` 个 `(b,h)` 位置可把 program 数降 70%，且逐位一致 |
 
-### 未验证（当前无法验证）
+### 结构变体：每 program 多个 `(b,h)`
+
+候选在 `competition/.local/candidates/task112-pairs/`（含假设与可证伪条件）。动因：公开形状下每个位置只有 `N*D` 次读、`D` 次写；小端只有几百个元素，而昆仑芯后端的成本模型是"program 之间不重叠、每条访存指令串行"，program 数直接决定串行长度。
+
+| 用例 | 种子（1 位置/program） | 变体（`PAIRS`=4 或 1） | program 数 |
+|---|---:|---:|---:|
+| n2-base-e | 32 | 8 | −75% |
+| n4-base-e-lse | 128 | 32 | −75% |
+| n8-base2-lse | 32 | 8 | −75% |
+| n8-d512（D≥256 → `PAIRS`=1） | 32 | 32 | 0 |
+| n2-b64 | 1024 | 256 | −75% |
+| n4-d512-base2（D≥256） | 64 | 64 | 0 |
+| n1-single | 32 | 8 | −75% |
+| n4-dead-shard | 32 | 8 | −75% |
+| **合计** | **1376** | **416** | **−70%** |
+
+**这是结构事实，不是速度测量**：`PAIRS` 的阈值（D<256 用 4）是待设备扫参的猜测；寄存器压力（`PAIRS*HEAD_DIM` 个 fp32 同时存活）与每位置多出的整除/取模都可能让它变慢。设备上无提速即否证。
+
+### CPU 回路这一轮抓到的三个错误（都已修复或作为否证保留）
+
+1. **NaN/+inf 净化缺失** → `n4-dead-shard.out` 失败（否证 A）。
+2. **base-2 分支被忽略** → `n8-base2-lse.out` 失败，最大相对差 480×（否证 B）。
+3. **真实 bug：越界守卫写错**。变体最初把守卫写成 `position < H`（应为 `position < B*H`）。所有开发用例的 `B*H` 都能被 4 整除，所以 `EXACT=True` 路径不会触发它；用 `PAIRS=5` 强制走非整除路径后，**写覆盖检查抓住了它**：`n2-base-e.out: write coverage missing=1536`（输出元素被整块漏写，而数值比对根本不会发现未初始化内存）。证据保留在变体 run 的 `cpu-semantic.txt`。
+
+## 未验证（当前无法验证）
 
 - **目标芯片正确性、设备行为与任何性能数据**：CPU 语义模型明确不提供这些（`LIMIT` 行每次都打印），租用设备仍不可达（`doctor --device t4` → `SSH scratch creation failed`）。
 - **官方用例集与 baseline 包**：平台不公开；本表的形状/容差来源是其"参考"而非官方判定。
@@ -71,6 +96,7 @@ competition/.local/.venv-cpu/bin/python competition/task112/validate_cpu.py --ve
 
 ## 下一步
 
-1. CPU 语义回路已可用，可以在无设备时继续做**语义安全**的结构改动（例如在线单遍合并、D 拆分、每 program 多 `(b,h)`），每次改动都必须新建 run 并重跑 `validate_cpu`；
-2. 真正的性能判定仍需要设备或平台评测：租用设备需要新的隧道端点，平台评测需要用户在批次/团队范围内的显式授权。
+1. 设备扫参（一旦有设备）：`PAIRS ∈ {1,2,4,8}` × 公开形状表 × 两个 `is_lse_base_on_e` 值，判定变体是否真的更快，并标出寄存器压力拐点；
+2. 无设备时继续做语义安全的结构改动（在线单遍合并、减少 lse 重复加载、`PAIRS` 与 D 的组合），每次改动新建 run 并重跑 `validate_cpu`（含否证对照）；
+3. 真正的性能判定仍需要设备或平台评测：租用设备需要新的隧道端点，平台评测需要用户在批次/团队范围内的显式授权。
 

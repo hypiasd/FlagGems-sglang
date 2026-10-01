@@ -149,15 +149,22 @@ def run_case(adapter, cpu_model, model, wrapper, case, seed, verbose):
             )
         except AssertionError as exc:
             raise AssertionError(f"{case['id']}.lse: {exc}") from exc
+    grid = call.launches[-1][1] if call.launches else ()
+    programs = 0
+    for _, shape in call.launches:
+        count = 1
+        for axis in shape:
+            count *= axis
+        programs += count
     if verbose:
-        launches = sum(1 for _ in call.launches)
         print(
             f"PASS {case['id']}: N={case['n']} B={case['b']} H={case['h']} "
             f"D={case['d']} base_e={case['base_e']} "
             f"return_lse={case['return_lse']} "
-            f"dead_shards={case['dead_shards']} launches={launches}"
+            f"dead_shards={case['dead_shards']} grid={grid} "
+            f"programs={programs} launches={len(call.launches)}"
         )
-    return len(call.launches)
+    return programs
 
 
 def run(source_path: Path, only=None, seed=0, verbose=False) -> int:
@@ -181,13 +188,16 @@ def run(source_path: Path, only=None, seed=0, verbose=False) -> int:
             suite = [case for case in suite if case["id"] in only]
             if not suite:
                 raise AssertionError(f"no case matches {sorted(only)}")
-        cases = launches = 0
+        cases = programs = 0
         for case in suite:
-            launches += run_case(
+            programs += run_case(
                 adapter, cpu_model, model, wrapper, case, seed, verbose
             )
             cases += 1
-    print(f"PASS: {cases}/{cases} CPU semantic cases; {launches} launches")
+    print(
+        f"PASS: {cases}/{cases} CPU semantic cases; {programs} model programs "
+        "(program count is a structural fact, not a speed measurement)"
+    )
     print(
         "LIMIT: no vendor compiler, accelerator correctness, device limits, "
         "or performance evidence; this is not target evidence"
