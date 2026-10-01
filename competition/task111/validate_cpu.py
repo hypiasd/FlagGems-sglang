@@ -67,9 +67,20 @@ def load_candidate(path, model) -> ModuleType:
     return module
 
 
-def check_coverage(cpu_model, call, tensor, label):
+def check_coverage(cpu_model, call, tensor, label, allow_rewrite=False):
+    """Require coverage, exactly once unless a multi-pass design opts in.
+
+    A two-pass schedule (copy every slot, then overwrite the touched ones)
+    legitimately writes some elements twice.  With ``allow_rewrite`` the
+    duplicate writes are tolerated and *returned*, because their count is
+    exactly the traffic that schedule pays for -- a measured number behind the
+    cost model instead of an assertion.
+
+    Trees outside the returned view are always rejected: writing past the view
+    is a bug in every schedule.
+    """
     if tensor.numel() == 0:
-        return
+        return 0
     key = cpu_model.storage_key(tensor)
     allocation = call.allocations.get(key)
     if allocation is None:
@@ -80,19 +91,27 @@ def check_coverage(cpu_model, call, tensor, label):
         )
     indices = cpu_model.logical_offsets(tensor)
     counts = allocation.writes[indices]
-    if not bool((counts == 1).all()):
-        missing = int((counts == 0).sum())
-        multiple = int((counts > 1).sum())
-        raise AssertionError(
-            f"{label}: write coverage missing={missing} multiple={multiple}"
-        )
-    if int(allocation.writes.sum()) != tensor.numel():
-        raise AssertionError(
-            f"{label}: kernel wrote outside the returned view"
-        )
+    missing = int((counts == 0).sum())
+    multiple = int((counts > 1).sum())
+    if missing:
+        raise AssertionError(f"{label}: write coverage missing={missing}")
+    if multiple and not allow_rewrite:
+        raise AssertionError(f"{label}: write coverage multiple={multiple}")
+    if int(allocation.writes.sum()) - tensor.numel() != multiple:
+        raise AssertionError(f"{label}: kernel wrote outside the returned view")
+    return multiple
 
 
-def run_case(adapter, cpu_model, model, wrapper, case, seed, verbose):
+def run_case(
+    adapter,
+    cpu_model,
+    model,
+    wrapper,
+    case,
+    seed,
+    verbose,
+    allow_rewrite=False,
+):
     values = adapter.inputs(case, "cpu", seed)
     expected = adapter.reference(*values)
     tensors = [value for value in values if isinstance(value, torch.Tensor)]
@@ -117,7 +136,9 @@ def run_case(adapter, cpu_model, model, wrapper, case, seed, verbose):
 
     if not isinstance(got, torch.Tensor):
         raise AssertionError("wrapper must return a single tensor")
-    check_coverage(cpu_model, call, got, f"{case['id']}.out")
+    rewrites = check_coverage(
+        cpu_model, call, got, f"{case['id']}.out", allow_rewrite=allow_rewrite
+    )
     try:
         adapter.check(got, expected)
     except AssertionError as exc:
@@ -136,12 +157,15 @@ def run_case(adapter, cpu_model, model, wrapper, case, seed, verbose):
             f"requests={case['requests']} draft={case['draft']} "
             f"dim={case['dim']} window={case['window']} "
             f"dtype={case['dtype']} all_invalid={case['all_invalid']} "
-            f"grid={grid} programs={programs} launches={len(call.launches)}"
+            f"grid={grid} programs={programs} launches={len(call.launches)} "
+            f"rewrites={rewrites}"
         )
     return programs
 
 
-def run(source_path: Path, only=None, seed=0, verbose=False) -> int:
+def run(
+    source_path: Path, only=None, seed=0, verbose=False, allow_rewrite=False
+) -> int:
     if torch is None:
         raise RuntimeError(
             "PyTorch is unavailable; local semantic state is inconclusive "
@@ -154,6 +178,7 @@ def run(source_path: Path, only=None, seed=0, verbose=False) -> int:
     cpu_model = load_module("_flagos_shared_cpu_model", MODEL_PATH)
     adapter = load_module("_task111_adapter", TASK / "adapter.py")
     model = cpu_model.CPUModel()
+    model.allow_rewrite = allow_rewrite
     with model.installed():
         module = load_candidate(source_path, model)
         wrapper = module.conv_window_scatter_with_mask
@@ -165,7 +190,14 @@ def run(source_path: Path, only=None, seed=0, verbose=False) -> int:
         cases = programs = 0
         for case in suite:
             programs += run_case(
-                adapter, cpu_model, model, wrapper, case, seed, verbose
+                adapter,
+                cpu_model,
+                model,
+                wrapper,
+                case,
+                seed,
+                verbose,
+                allow_rewrite,
             )
             cases += 1
     print(
@@ -189,9 +221,20 @@ def main() -> int:
     parser.add_argument("--case", action="append", dest="only")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--verbose", action="store_true")
+    parser.add_argument(
+        "--allow-rewrite",
+        action="store_true",
+        help="accept a multi-pass schedule that rewrites touched elements",
+    )
     args = parser.parse_args()
     try:
-        return run(args.source.resolve(), args.only, args.seed, args.verbose)
+        return run(
+            args.source.resolve(),
+            args.only,
+            args.seed,
+            args.verbose,
+            args.allow_rewrite,
+        )
     except Exception as exc:
         print(f"FAIL: {exc}", file=sys.stderr)
         return 1
