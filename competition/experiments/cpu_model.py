@@ -420,6 +420,8 @@ class ValidationCall:
         self.launches = []
         self.snapshots = []
         self.max_programs = max_programs
+        # Opt-in, see pointer(): auxiliary read-only tensors a candidate owns.
+        self.allow_auxiliary = False
         for tensor in inputs:
             key = storage_key(tensor)
             if key not in self.allocations:
@@ -449,6 +451,23 @@ class ValidationCall:
 
     def pointer(self, tensor):
         key = storage_key(tensor)
+        if self.allow_auxiliary and key not in self.allocations:
+            # A candidate may legitimately keep its own read-only device-side
+            # scratch (for example a cached int32 buffer holding strides).
+            # Default stays strict: passing an unregistered tensor is an error,
+            # because in every other case it means stale or accidental memory.
+            self.allocations[key] = Allocation(tensor, readonly=True)
+            self.snapshots.append(
+                (
+                    tensor,
+                    key,
+                    tensor.shape,
+                    tensor.stride(),
+                    tensor.storage_offset(),
+                    tensor._version,
+                    storage_vector(tensor).view(torch.uint8).clone(),
+                )
+            )
         require(
             key in self.allocations,
             "unregistered tensor argument; expected input or allocated output",

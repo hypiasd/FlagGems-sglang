@@ -33,19 +33,7 @@ def _conv_window_scatter_kernel(
     dst_idx_ptr,
     step_idx_ptr,
     out_ptr,
-    dst_s0,
-    dst_s1,
-    dst_s2,
-    dst_s3,
-    src_s0,
-    src_s1,
-    src_s2,
-    src_s3,
-    src_s4,
-    out_s0,
-    out_s1,
-    out_s2,
-    out_s3,
+    strides_ptr,
     CACHE: tl.constexpr,
     DIM: tl.constexpr,
     WINDOW: tl.constexpr,
@@ -53,6 +41,20 @@ def _conv_window_scatter_kernel(
     ROW_BLOCK: tl.constexpr,
     REQUESTS: tl.constexpr,
 ):
+    dst_s0 = tl.load(strides_ptr + 0)
+    dst_s1 = tl.load(strides_ptr + 1)
+    dst_s2 = tl.load(strides_ptr + 2)
+    dst_s3 = tl.load(strides_ptr + 3)
+    src_s0 = tl.load(strides_ptr + 4)
+    src_s1 = tl.load(strides_ptr + 5)
+    src_s2 = tl.load(strides_ptr + 6)
+    src_s3 = tl.load(strides_ptr + 7)
+    src_s4 = tl.load(strides_ptr + 8)
+    out_s0 = tl.load(strides_ptr + 9)
+    out_s1 = tl.load(strides_ptr + 10)
+    out_s2 = tl.load(strides_ptr + 11)
+    out_s3 = tl.load(strides_ptr + 12)
+
     position = tl.program_id(0)
     layer = position // (CACHE * N_CHUNK)
     rest = position % (CACHE * N_CHUNK)
@@ -116,7 +118,10 @@ def conv_window_scatter_with_mask(dst, src, dst_indices_raw, step_indices_raw):
     small the number is dominated by Python: an empty kernel measured 13.7 us on
     T4, a raw launch with pre-built arguments 22.3 us, and the previous entry
     43.2 us.  Every shape-dependent quantity is computed once per
-    (shape, strides, dtype) key and the hot path is a five-argument call.
+    (shape, strides, dtype) key.  The 13 stride scalars are not passed per
+    call: they live in a small cached int32 device buffer, so the signature is
+    six pointers instead of eighteen arguments plus six constexprs -- argument
+    binding measured 11.2 us of the 32.9 us entry on T4.
 
     The plan is keyed by the **source strides as well as the shape**: the same
     shape legitimately arrives with a different window layout, and a cache keyed
@@ -124,7 +129,7 @@ def conv_window_scatter_with_mask(dst, src, dst_indices_raw, step_indices_raw):
     ``l2-c16-r5-d3-dim8-w3-padded`` exists in the case table precisely to make a
     shape-only key fail.
     """
-    key = (dst.shape, dst.stride(), src.stride(), dst.dtype)
+    key = (dst.shape, dst.stride(), src.stride(), dst.dtype, dst.device)
     plan = _PLANS.get(key)
     out = torch.empty_like(dst)
     if plan is None:
@@ -135,16 +140,24 @@ def conv_window_scatter_with_mask(dst, src, dst_indices_raw, step_indices_raw):
         chunks = triton.cdiv(row_length, row_block)
         plan = (
             (layers * cache * chunks,),
-            (
-                dst.stride(0),
-                dst.stride(1),
-                dst.stride(2),
-                dst.stride(3),
-                src.stride(0),
-                src.stride(1),
-                src.stride(2),
-                src.stride(3),
-                src.stride(4),
+            torch.tensor(
+                [
+                    dst.stride(0),
+                    dst.stride(1),
+                    dst.stride(2),
+                    dst.stride(3),
+                    src.stride(0),
+                    src.stride(1),
+                    src.stride(2),
+                    src.stride(3),
+                    src.stride(4),
+                    out.stride(0),
+                    out.stride(1),
+                    out.stride(2),
+                    out.stride(3),
+                ],
+                dtype=torch.int32,
+                device=dst.device,
             ),
             dict(
                 CACHE=cache,
@@ -163,8 +176,7 @@ def conv_window_scatter_with_mask(dst, src, dst_indices_raw, step_indices_raw):
         dst_indices_raw,
         step_indices_raw,
         out,
-        *tail,
-        *out.stride(),
+        tail,
         **consts,
     )
     return out

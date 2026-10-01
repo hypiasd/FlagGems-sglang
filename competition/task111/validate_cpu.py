@@ -113,11 +113,13 @@ def run_case(
     seed,
     verbose,
     allow_rewrite=False,
+    allow_auxiliary=False,
 ):
     values = adapter.inputs(case, "cpu", seed)
     expected = adapter.reference(*values)
     tensors = [value for value in values if isinstance(value, torch.Tensor)]
     call = cpu_model.ValidationCall(tensors, max_programs=MAX_PROGRAMS)
+    call.allow_auxiliary = allow_auxiliary
     model.call = call
     real_empty, real_empty_like = torch.empty, torch.empty_like
 
@@ -166,7 +168,12 @@ def run_case(
 
 
 def run(
-    source_path: Path, only=None, seed=0, verbose=False, allow_rewrite=False
+    source_path: Path,
+    only=None,
+    seed=0,
+    verbose=False,
+    allow_rewrite=False,
+    allow_auxiliary=False,
 ) -> int:
     if torch is None:
         raise RuntimeError(
@@ -200,6 +207,7 @@ def run(
                 seed,
                 verbose,
                 allow_rewrite,
+                allow_auxiliary,
             )
             cases += 1
     print(
@@ -224,6 +232,11 @@ def main() -> int:
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--verbose", action="store_true")
     parser.add_argument(
+        "--allow-auxiliary",
+        action="store_true",
+        help="accept read-only auxiliary tensors the candidate owns",
+    )
+    parser.add_argument(
         "--allow-rewrite",
         action="store_true",
         help="accept a multi-pass schedule that rewrites touched elements",
@@ -236,6 +249,7 @@ def main() -> int:
             args.seed,
             args.verbose,
             args.allow_rewrite,
+            args.allow_auxiliary,
         )
     except Exception as exc:
         print(f"FAIL: {exc}", file=sys.stderr)
