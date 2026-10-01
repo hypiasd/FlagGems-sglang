@@ -32,17 +32,21 @@ reference only.
 
 from competition.experiments.checking import check_output
 
-# (id, layers, cache, requests, draft, dim, window, dtypes, all_invalid)
+# (id, layers, cache, requests, draft, dim, window, dtypes, all_invalid, pad)
 _CASES = (
-    ("l2-c16-r5-d3-dim8-w3", 2, 16, 5, 3, 8, 3, "float32", False),
-    ("l4-c64-r16-d4-dim64-w8", 4, 64, 16, 4, 64, 8, "float32", False),
-    ("l2-c13-r7-d5-dim96-w5", 2, 13, 7, 5, 96, 5, "float32", False),
-    ("l1-c32-r1-d2-dim32-w2", 1, 32, 1, 2, 32, 2, "float32", False),
-    ("l3-c64-r8-d4-dim128-w16", 3, 64, 8, 4, 128, 16, "float32", False),
-    ("l2-c16-r5-d3-dim8-w3-all-invalid", 2, 16, 5, 3, 8, 3, "float32", True),
-    ("l2-c512-r32-d16-dim128-w16", 2, 512, 32, 16, 128, 16, "float32", False),
-    ("l2-c16-r5-d3-dim8-w3-fp16", 2, 16, 5, 3, 8, 3, "float16", False),
-    ("l2-c10-r3-d2-dim24-w4-live", 2, 10, 3, 2, 24, 4, "float32", False),
+    ("l2-c16-r5-d3-dim8-w3", 2, 16, 5, 3, 8, 3, "float32", False, 0),
+    # Same shape and dtype as the case above, different source strides: the
+    # plan cache must be keyed by strides, and this case is what makes a
+    # shape-only key observably wrong.
+    ("l2-c16-r5-d3-dim8-w3-padded", 2, 16, 5, 3, 8, 3, "float32", False, 7),
+    ("l4-c64-r16-d4-dim64-w8", 4, 64, 16, 4, 64, 8, "float32", False, 0),
+    ("l2-c13-r7-d5-dim96-w5", 2, 13, 7, 5, 96, 5, "float32", False, 0),
+    ("l1-c32-r1-d2-dim32-w2", 1, 32, 1, 2, 32, 2, "float32", False, 0),
+    ("l3-c64-r8-d4-dim128-w16", 3, 64, 8, 4, 128, 16, "float32", False, 0),
+    ("l2-c16-r5-d3-dim8-w3-all-invalid", 2, 16, 5, 3, 8, 3, "float32", True, 0),
+    ("l2-c512-r32-d16-dim128-w16", 2, 512, 32, 16, 128, 16, "float32", False, 0),
+    ("l2-c16-r5-d3-dim8-w3-fp16", 2, 16, 5, 3, 8, 3, "float16", False, 0),
+    ("l2-c10-r3-d2-dim24-w4-live", 2, 10, 3, 2, 24, 4, "float32", False, 0),
 )
 
 _QUICK = (
@@ -64,8 +68,20 @@ def cases():
             "window": window,
             "dtype": dtype,
             "all_invalid": all_invalid,
+            "pad": pad,
         }
-        for case_id, layers, cache, requests, draft, dim, window, dtype, all_invalid in _CASES
+        for (
+            case_id,
+            layers,
+            cache,
+            requests,
+            draft,
+            dim,
+            window,
+            dtype,
+            all_invalid,
+            pad,
+        ) in _CASES
     ]
 
 
@@ -87,7 +103,7 @@ def inputs(case, device, seed):
     dtype = getattr(torch, case["dtype"])
 
     # Shared sliding-window buffer: [layers, requests, dim, draft + window - 1].
-    width = draft + window - 1
+    width = draft + window - 1 + case.get("pad", 0)
     buffer = torch.randn(
         layers, requests, dim, width, generator=gen, dtype=torch.float32
     ).to(dtype)

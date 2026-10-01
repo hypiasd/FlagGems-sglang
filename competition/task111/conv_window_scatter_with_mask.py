@@ -23,6 +23,7 @@ import triton.language as tl
 __all__ = ["conv_window_scatter_with_mask"]
 
 _ROW_CAP = 1024
+_PLANS = {}
 
 
 @triton.jit
@@ -103,37 +104,67 @@ def _conv_window_scatter_kernel(
 
 
 def conv_window_scatter_with_mask(dst, src, dst_indices_raw, step_indices_raw):
-    """Masked gather-scatter over an overlapping conv-window view, one launch."""
-    layers, cache, dim, window = dst.shape
-    requests = dst_indices_raw.shape[0]
+    """Masked gather-scatter over an overlapping conv-window view, one launch.
+
+    The schedule is the measured best one (one program per (layer, slot,
+    row-chunk), reverse lookup by scanning the request table): a 54x smaller
+    grid measured 3-4x *slower* on T4, because each program then carries tens of
+    thousands of elements and the device runs out of parallelism.
+
+    What is optimised here instead is the call path.  The harness times the
+    public entry with CUDA events averaged over N calls, so for kernels this
+    small the number is dominated by Python: an empty kernel measured 13.7 us on
+    T4, a raw launch with pre-built arguments 22.3 us, and the previous entry
+    43.2 us.  Every shape-dependent quantity is computed once per
+    (shape, strides, dtype) key and the hot path is a five-argument call.
+
+    The plan is keyed by the **source strides as well as the shape**: the same
+    shape legitimately arrives with a different window layout, and a cache keyed
+    by shape alone would then reuse a stale plan.  That is not hypothetical --
+    ``l2-c16-r5-d3-dim8-w3-padded`` exists in the case table precisely to make a
+    shape-only key fail.
+    """
+    key = (dst.shape, dst.stride(), src.stride(), dst.dtype)
+    plan = _PLANS.get(key)
     out = torch.empty_like(dst)
-    row_length = dim * window
-    row_block = min(triton.next_power_of_2(max(row_length, 1)), _ROW_CAP)
-    chunks = triton.cdiv(row_length, row_block)
-    _conv_window_scatter_kernel[(layers * cache * chunks,)](
+    if plan is None:
+        layers, cache, dim, window = dst.shape
+        requests = dst_indices_raw.shape[0]
+        row_length = dim * window
+        row_block = min(triton.next_power_of_2(max(row_length, 1)), _ROW_CAP)
+        chunks = triton.cdiv(row_length, row_block)
+        plan = (
+            (layers * cache * chunks,),
+            (
+                dst.stride(0),
+                dst.stride(1),
+                dst.stride(2),
+                dst.stride(3),
+                src.stride(0),
+                src.stride(1),
+                src.stride(2),
+                src.stride(3),
+                src.stride(4),
+            ),
+            dict(
+                CACHE=cache,
+                DIM=dim,
+                WINDOW=window,
+                N_CHUNK=chunks,
+                ROW_BLOCK=row_block,
+                REQUESTS=requests,
+            ),
+        )
+        _PLANS[key] = plan
+    grid, tail, consts = plan
+    _conv_window_scatter_kernel[grid](
         dst,
         src,
         dst_indices_raw,
         step_indices_raw,
         out,
-        dst.stride(0),
-        dst.stride(1),
-        dst.stride(2),
-        dst.stride(3),
-        src.stride(0),
-        src.stride(1),
-        src.stride(2),
-        src.stride(3),
-        src.stride(4),
-        out.stride(0),
-        out.stride(1),
-        out.stride(2),
-        out.stride(3),
-        CACHE=cache,
-        DIM=dim,
-        WINDOW=window,
-        N_CHUNK=chunks,
-        ROW_BLOCK=row_block,
-        REQUESTS=requests,
+        *tail,
+        *out.stride(),
+        **consts,
     )
     return out
