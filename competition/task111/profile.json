@@ -1,0 +1,44 @@
+{
+  "schema_version": 2,
+  "task_id": "task111",
+  "operator": "conv_window_scatter_with_mask",
+  "entrypoint": "conv_window_scatter_with_mask(dst, src, dst_indices_raw, step_indices_raw)",
+  "package_members": [
+    "conv_window_scatter_with_mask.py"
+  ],
+  "targets": [
+    "iluvatar",
+    "metax",
+    "hygon",
+    "kunlunxin",
+    "ascend",
+    "intl_a",
+    "intl_b"
+  ],
+  "target_labels": {},
+  "contract_source": {
+    "kind": "official-api",
+    "url": "https://flagos.io/flagos/api/v1/races/782kzq4m/operator-tasks/conv_window_scatter_with_mask",
+    "verified_at": "2026-10-02"
+  },
+  "case_coverage": "development-assumptions",
+  "official_cases_complete": false,
+  "hardware_requirements": {},
+  "publication_policy": null,
+  "review_policy": {
+    "independent_reviews": 2
+  },
+  "structural_delta_required": true,
+  "core_computation": "triton-only",
+  "dtype": {
+    "dst": "same-as-src",
+    "src": "same-as-dst"
+  },
+  "tolerance": {
+    "output": {
+      "atol": 0.0,
+      "rtol": 0.0
+    }
+  },
+  "scope": "masked gather-scatter over the conv-window cache: out = dst.clone(); for every request i with step_indices_raw[i] >= 0, out[:, dst_indices_raw[i]] = src[:, i, step_indices_raw[i]]; src is an overlapping as_strided view over a shared [..., dim, draft + K - 1] buffer, so the window axis shares one contiguous axis with the step axis and dim rows are not contiguous"
+}
