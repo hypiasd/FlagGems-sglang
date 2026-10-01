@@ -77,7 +77,9 @@ def _dcp_lse_combine_kunlunxin_kernel(
     # Pass 1: the shard max over a [1] block; NaN / +inf become -inf.
     lse_max = tl.full([1], float("-inf"), dtype=tl.float32)
     for i in tl.static_range(N):
-        value = tl.load(recv_lse_ptr + lse_base + i * l_stride_n).to(tl.float32)
+        value = tl.load(recv_lse_ptr + lse_base + i * l_stride_n).to(
+            tl.float32
+        )
         value = tl.where(
             (value != value) | (value == float("inf")),
             -float("inf"),
@@ -90,7 +92,9 @@ def _dcp_lse_combine_kunlunxin_kernel(
     weight_sum = tl.zeros([1], dtype=tl.float32)
     acc = tl.zeros([D_BLOCK], dtype=tl.float32)
     for i in tl.static_range(N):
-        value = tl.load(recv_lse_ptr + lse_base + i * l_stride_n).to(tl.float32)
+        value = tl.load(recv_lse_ptr + lse_base + i * l_stride_n).to(
+            tl.float32
+        )
         value = tl.where(
             (value != value) | (value == float("inf")),
             -float("inf"),

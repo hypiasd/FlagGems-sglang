@@ -98,7 +98,10 @@ class ProfileTest(unittest.TestCase):
             self.assertTrue(name.startswith(f"{PROFILE['operator']}_"), name)
             suffix = name[len(PROFILE["operator"]) + 1 : -len(".py")]
             self.assertIn(suffix, PROFILE["targets"], name)
-        self.assertEqual(len(set(PROFILE["package_members"])), len(PROFILE["package_members"]))
+        self.assertEqual(
+            len(set(PROFILE["package_members"])),
+            len(PROFILE["package_members"]),
+        )
         layout = members.audit(
             PROFILE["operator"],
             TASK,
