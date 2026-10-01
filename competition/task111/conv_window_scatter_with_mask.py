@@ -84,7 +84,10 @@ def _conv_window_scatter_kernel(
         + dim_index * dst_s2
         + window_index * dst_s3
     )
-    value = tl.load(dst_ptr + dst_offset, mask=in_row, other=0.0)
+    # Slots that resolve to a request overwrite their destination value, so
+    # reading it first would be a dead load.  Dropping it removes the
+    # `requests / cache` share of the destination read stream.
+    value = tl.load(dst_ptr + dst_offset, mask=in_row & (~hit), other=0.0)
 
     src_offset = (
         layer * src_s0
@@ -115,19 +118,30 @@ def conv_window_scatter_with_mask(dst, src, dst_indices_raw, step_indices_raw):
 
     What is optimised here instead is the call path.  The harness times the
     public entry with CUDA events averaged over N calls, so for kernels this
-    small the number is dominated by Python: an empty kernel measured 13.7 us on
-    T4, a raw launch with pre-built arguments 22.3 us, and the previous entry
-    43.2 us.  Every shape-dependent quantity is computed once per
-    (shape, strides, dtype) key.  The 13 stride scalars are not passed per
-    call: they live in a small cached int32 device buffer, so the signature is
-    six pointers instead of eighteen arguments plus six constexprs -- argument
-    binding measured 11.2 us of the 32.9 us entry on T4.
+    small the number is dominated by Python.  Measured on T4 at the smallest
+    case (medians of 7, same protocol): an empty one-argument kernel 12.3 us; a
+    bare launch of this kernel with a preallocated output 19.3 us; a fresh
+    ``torch.empty_like`` interleaved with launches adds ~6 us (it costs only
+    2.9 us in isolation -- the allocator has to account for blocks still in use
+    by queued kernels); the previous entry 43.2 us.  Every shape-dependent
+    quantity is computed once per (shape, strides, dtype) key.  The 13 stride
+    scalars are not passed per call: they live in a small cached int32 device
+    buffer, so the signature is six pointers instead of eighteen arguments plus
+    six constexprs -- argument binding measured 11.2 us of the 32.9 us entry.
+    Binding a *fresh* tensor object is itself free: cycling a preallocated pool
+    of eight outputs measured 18.6 us against 19.3 us for one fixed tensor.
 
     The plan is keyed by the **source strides as well as the shape**: the same
     shape legitimately arrives with a different window layout, and a cache keyed
     by shape alone would then reuse a stale plan.  That is not hypothetical --
     ``l2-c16-r5-d3-dim8-w3-padded`` exists in the case table precisely to make a
     shape-only key fail.
+
+    The remaining constexprs are passed **positionally** from a tuple built with
+    the plan.  On the same kernel, grid, tensors and values that measured 24.5 us
+    against 27.5 us with ``**consts``: keyword expansion plus signature binding
+    costs about 3 us per call, which is 11% of the whole entry.  Caching the
+    ``kernel[grid]`` launcher object instead changed nothing (24.5 vs 24.6 us).
     """
     key = (dst.shape, dst.stride(), src.stride(), dst.dtype, dst.device)
     plan = _PLANS.get(key)
@@ -159,14 +173,8 @@ def conv_window_scatter_with_mask(dst, src, dst_indices_raw, step_indices_raw):
                 dtype=torch.int32,
                 device=dst.device,
             ),
-            dict(
-                CACHE=cache,
-                DIM=dim,
-                WINDOW=window,
-                N_CHUNK=chunks,
-                ROW_BLOCK=row_block,
-                REQUESTS=requests,
-            ),
+            # Order must match the kernel signature, but positionally.
+            (cache, dim, window, chunks, row_block, requests),
         )
         _PLANS[key] = plan
     grid, tail, consts = plan
@@ -177,6 +185,6 @@ def conv_window_scatter_with_mask(dst, src, dst_indices_raw, step_indices_raw):
         step_indices_raw,
         out,
         tail,
-        **consts,
+        *consts,
     )
     return out
