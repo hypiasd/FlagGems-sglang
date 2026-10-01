@@ -31,6 +31,15 @@ _CASES = (
     ("n4-d512-base2", 4, 8, 8, 512, False, True, False),
     ("n1-single", 1, 4, 8, 64, True, True, False),
     ("n4-dead-shard", 4, 4, 8, 128, True, False, True),
+    # The two cases below exist because of a gap the CPU loop exposed: every
+    # published shape has batch * head divisible by any plausible per-program
+    # grouping, so a variant that folds several positions into one block never
+    # exercises its row mask.  A negative control that deleted that mask
+    # therefore still passed.  `n3-b1h3-d96` has 3 positions (one masked row
+    # under a 4-row block) and a non-power-of-two head dim (masked columns);
+    # `n7-b7h1-base2` has 7 positions (one masked row under an 8-row block).
+    ("n3-b1h3-d96", 3, 1, 3, 96, True, True, False),
+    ("n7-b7h1-base2", 7, 7, 1, 64, False, True, False),
 )
 
 _QUICK = ("n2-base-e", "n4-base-e-lse", "n8-base2-lse")

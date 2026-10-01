@@ -212,6 +212,8 @@ class CPUModel:
         self.tl.multiple_of = lambda value, _alignment: value
         self.tl.max_contiguous = lambda value, _alignment: value
         self.tl.maximum = lambda x, y: torch.maximum(torch.as_tensor(x), torch.as_tensor(y))
+        # ``tl.max`` as a reduction over one axis: values only, like Triton.
+        self.tl.max = self.reduce_max
         # Elementwise math and constructors used by attention-style kernels.
         # Additions only: they change no existing indexing or coverage check.
         self.tl.exp = torch.exp
@@ -268,6 +270,14 @@ class CPUModel:
     def kernel_range(*args):
         for value in range(*args):
             yield torch.tensor(value, dtype=torch.int64)
+
+    @staticmethod
+    def reduce_max(value, axis=0):
+        """``tl.max``: values of a one-axis reduction, not indices."""
+        value = torch.as_tensor(value)
+        if value.dim() == 0:
+            return value
+        return torch.max(value, dim=int(axis)).values
 
     @staticmethod
     def arange(start, end):

@@ -155,7 +155,28 @@ class CaseTableTest(unittest.TestCase):
         for case in self.cases:
             self.assertGreaterEqual(case["n"], 1)
             self.assertGreaterEqual(case["d"], 1)
-            self.assertEqual(case["d"] & (case["d"] - 1), 0, case["d"])
+        # The published table uses power-of-two head dims only, and the dev
+        # table keeps exactly one off-layout probe on purpose: a power-of-two
+        # D leaves the masked-column path untested (see adapter.py).
+        off_layout = [
+            case["id"]
+            for case in self.cases
+            if case["d"] & (case["d"] - 1) != 0
+        ]
+        self.assertEqual(off_layout, ["n3-b1h3-d96"])
+
+    def test_off_layout_probes_cover_the_masked_row_path(self) -> None:
+        """``batch * head`` must not be divisible by any plausible block width.
+
+        This is the gap the CPU loop exposed: with every published shape
+        divisible by the per-program grouping, a variant that folds several
+        positions into one block never runs its row mask, so a negative control
+        that deleted that mask still passed.
+        """
+        for case_id in ("n3-b1h3-d96", "n7-b7h1-base2"):
+            case = next(c for c in self.cases if c["id"] == case_id)
+            positions = case["b"] * case["h"]
+            self.assertNotEqual(positions & (positions - 1), 0, case_id)
 
     def test_quick_cases_are_the_small_representatives(self) -> None:
         by_id = {case["id"]: case for case in self.cases}

@@ -65,6 +65,8 @@ python -m competition.experiments report --run RUN_ID
 
 - **这是语义证据，永远不是设备或性能证据**；每次运行都打印 `LIMIT` 行，不得把它写成目标芯片正确性或加速比。
 - **必须带否证对照**：故意破坏一个语义分支（例如删掉 NaN 净化、把 base-2 分支改成总是 `exp`），确认验证器在**对应那条用例**上失败。没有否证对照的"全过"没有信息量，也不写进任何报告。
+- **否证对照必须真的失败过，且要针对新分支**：Task 112 的 `vec` 变体（把 position 轴折进 block）删掉输出行掩码后**照样全过**，因为开发用例的位置数全部可整除，掩码行从未出现——"变体通过"当时并不覆盖它自己的分支。做法固定为：先写下这个变体新增的分支，再造一个只破坏该分支的对照；对照若通过，先补用例（非整除位置数、非 2 幂 `D`、`H=1` 这类边角），再重跑对照直到它按预期失败。补用例会改动 `adapter.py`（在快照内），因此必须新建 run 并把新旧两版证据都留在各自的 `cpu-semantic.txt` 里。
+- **结构收益要按可复算的口径记账**：program 数是事实，位置级访存指令数可以按源码算术数出（例如每位置 `3N+1` 条），但都**不是速度**；证据文件里要把"这一轮改的是调度粒度还是指令数"写清楚，否则设备上无法区分两个假设谁对。
 - **环境**（本机实测）：共享模型自己桩 `triton`，所以只要 CPU torch，不需要真实 Triton。用 `uv` 建隔离环境到忽略目录：`uv venv --python 3.12 .local/.venv-cpu`，再 `uv pip install --python .local/.venv-cpu/bin/python --index-url https://download.pytorch.org/whl/cpu torch`（PyTorch CPU 索引可达；PyPI 直连此前被挡）。
 - **证据要绑到冻结字节**：改了源码必须新建 run，并对**该 run 的 `source/` 文件**运行验证，把输出（命令、torch 版本、逐例结果、否证对照）存进 `.local/runs/<run>/cpu-semantic.txt`。`validate_cpu.py` 本身不在 run 的 harness 快照内，可以随时修工具而不作废 run；`adapter.py` 在快照内，改它就要新建 run。
 
