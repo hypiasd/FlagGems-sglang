@@ -1,7 +1,7 @@
 """Offline tests for the evidence discipline.
 
 Stdlib only, no GPU, no torch and no network.  Run with
-``python -m unittest competition.pr.test_evidence``.
+``python -m unittest competition.archive.pr.test_evidence``.
 """
 
 from __future__ import annotations

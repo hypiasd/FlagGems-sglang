@@ -1,7 +1,7 @@
 """Offline tests for the upstream competition-PR channel.
 
 Stdlib only, no GPU and no torch: everything here is text, AST and gate
-plumbing.  Run with ``python -m unittest competition.pr.test_pr``.
+plumbing.  Run with ``python -m unittest competition.archive.pr.test_pr``.
 """
 
 from __future__ import annotations

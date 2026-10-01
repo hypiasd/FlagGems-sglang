@@ -8,17 +8,17 @@ Apache header and ``__all__``, passing ``basic-ci.yml``.
 
 Usage::
 
-    python -m competition.pr rules
-    python -m competition.pr plan --task task103 --adaptation adapt-1ba6bd8a83ce
-    python -m competition.pr bundle --task task103 --adaptation adapt-1ba6bd8a83ce
-    python -m competition.pr materialize --task task103 --adaptation adapt-1ba6bd8a83ce
-    python -m competition.pr check --task task103 --adaptation adapt-1ba6bd8a83ce
-    python -m competition.pr evidence --task task103 --adaptation adapt-1ba6bd8a83ce
+    python -m competition.archive.pr rules
+    python -m competition.archive.pr plan --task task103 --adaptation adapt-1ba6bd8a83ce
+    python -m competition.archive.pr bundle --task task103 --adaptation adapt-1ba6bd8a83ce
+    python -m competition.archive.pr materialize --task task103 --adaptation adapt-1ba6bd8a83ce
+    python -m competition.archive.pr check --task task103 --adaptation adapt-1ba6bd8a83ce
+    python -m competition.archive.pr evidence --task task103 --adaptation adapt-1ba6bd8a83ce
 
 ``evidence`` reuses the KernelGen reliability-gate methodology: it states, per
 target, which evidence state we are entitled to claim, keeps provisional
 platform readings out of any aggregate, and refuses to turn "no target
-evidence" into a pass.  See ``competition/pr/evidence.py``.
+evidence" into a pass.  See ``competition/archive/pr/evidence.py``.
 """
 
 from __future__ import annotations
@@ -276,7 +276,7 @@ def cmd_materialize(args) -> dict:
     tree = bundle_mod.materialize(dest, ref=args.ref)
     return {
         "tree": str(tree.relative_to(ROOT)),
-        "next": f"python -m competition.pr check --task {args.task} --adaptation {args.adaptation}",
+        "next": f"python -m competition.archive.pr check --task {args.task} --adaptation {args.adaptation}",
     }
 
 

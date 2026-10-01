@@ -1,11 +1,11 @@
 ---
 name: flagos-adaptation
-description: 将 FlagOS 实验候选适配到官方多芯片契约，检查发布条件、打包、通过 Chrome 提交、回填官方记录，并把获奖提交整理成上游仓库 PR；日常 GPU 优化使用 flagos-experiment。
+description: 将 FlagOS 实验候选适配到官方多芯片契约，检查发布条件、打包、通过 Chrome 提交、回填官方记录；日常 GPU 优化使用 flagos-experiment。
 ---
 
 # 比赛适配
 
-读取 [执行手册](../../../competition/WORKFLOW.md) 的比赛部分及本题 profile。题目支持芯片、入口和发布门槛独立维护，不固定为八款，不继承其他题目的数值目标。比赛有两条出口：平台 ZIP（评分）与上游仓库 PR（官方 `docs/CONTRIBUTING.md` 第 9 节的竞赛贡献规则）。
+读取 [执行手册](../../../competition/WORKFLOW.md) 的比赛部分及本题 profile。题目支持芯片、入口和发布门槛独立维护，不固定为八款，不继承其他题目的数值目标。出口只有一个：平台 ZIP（评分）。上游仓库 PR 已按用户指示移出流程（工具归档在 `competition/archive/pr/`），不是当前任何一步。
 
 1. `inspect --refresh` 保存官方公开契约证据。提交前通过 Chrome 确认当前任务、批次、登录团队、剩余额度、最近记录及重复包；公共 API 信息不代表提交授权。
 2. 从冻结实验用 `prepare` 建立独立适配目录。需要后端变化时编辑适配源码，再填 `release.json`。实验源码不变。包成员是 `profile.json` 的 `package_members`：平台按后缀把芯片路由到 `<op>_<chip>.py`，没有专用文件才用 `<op>.py`（实测：Task 103 昆仑芯 generic 0.09× → 专用文件 1.85×）。清单声明少了会让未声明的专用文件**被静默丢掉**，所以 `new`/`prepare`/`package` 都会 fail closed；开工前用 `members --task taskNN --source PATH` 看每颗芯片由哪个文件服务、哪些芯片共用 generic（共用 generic 的芯片就是还没单独优化过的那些）。
@@ -14,7 +14,6 @@ description: 将 FlagOS 实验候选适配到官方多芯片契约，检查发�
 5. 中断恢复先检查 Chrome 的最近记录；`upload_armed` 或更后不得盲目重复上传。包变化使原检查失效，必须重新检查。沿用超过 120 秒的提交间隔和当前可见额度限制。
 6. `record` 回填带平台证据、提交 ID 和包哈希的官方观测；评测中到完成可追加修订，同内容重试幂等。失败、异常及排除原因完整保留。确认全部本题目标通过、官方聚合有效后才比较成绩。每次回填后用 `report --targets` 看**逐目标账本**：聚合最优不等于逐芯片最优，逐目标账本给出每颗芯片的 `best_eligible` / `best_observed` / `source_versions` / 与最佳的差距和判读（源码未变则是复测抖动，源码变了才是版本回退）。看到某芯片数值比历史低时，先查 `source_versions`：只有 1 个版本就说明是平台重复测量的差异，不要当作版本退化，也不要据此改实现。
 7. **读完结果必须调整**：官方聚合 = 各目标 speedup 的**算术平均**（已核验），所以优先级按**绝对增量**排，不按相对提升。用 `decide --task taskNN` 得到每颗芯片的 action（`rework_below_baseline` / `rework_behind_reference` / `rework_under_served` / `hold_re_measure` / `keep`）与上界增量，再用 `decide --next-package` 拿到沿用什么文件的计划：**除新假设明确指名要改的芯片外，一律沿用产出该芯片最佳值的文件字节**，不再整包手工重挑。低于 1.0 的目标不因“落在复测波动内”而豁免。
-8. 平台评出成绩后，用 `competition.pr` 把获奖包转成上游 PR：`bundle`（tier 映射 + Apache 头 + `__all__` + 官方版本 isort/black + 超长文本折行 + 声明的 lint 改名，全部记进 `bundle.json`）、`materialize`（展开 `upstream/master` 并放入文件）、`check`（structure / hygiene / ast_preservation / style / 官方 ci_checks / import smoke / evidence）、`PR.md`（竞赛口径的 PR 描述，成绩抄自平台记录）。竞赛 PR 不需要 tests/benchmark/docs/operators.yaml；`import_smoke` 在无 torch+triton 的机器上只能报 `unavailable` 并给出设备上的执行命令。
-9. `evidence` 复用 KernelGen reliability-gate 的方法论并写成 `evidence.json`：能力三态（`absent` / `configured_unavailable` / `callable`，配置或握手不算可用）、逐目标一个证据状态（缺证据或部分覆盖是 `inconclusive`，不能靠解释升成 `target_validated` / `measured`）、性能只给标签且 `official_score_computed` 恒为 false、平台记录生命周期（`evaluating` 的数值是临时的，interim 行标 `superseded` 保留）、run record 字段纪律（重试换新 `run_id` 并用 `parent_run_id`）、两阶段独立审查收据。闸门里**矛盾 → fail，缺证据 → unavailable**，所以 `ready_for_pr` 始终不等于“已验证”。
+8. 证据纪律（复用 KernelGen 方法论，按**规则**执行，不靠 CLI）：能力三态（`absent` / `configured_unavailable` / `callable`，配置或握手不算可用）；逐目标一个证据状态（缺证据或部分覆盖是 `inconclusive`，不能靠解释升成 `target_validated` / `measured`）；性能只给标签且 `official_score_computed` 恒为 false；平台记录生命周期（`evaluating` 的数值是临时的，interim 行标 `superseded` 保留）；run record 字段纪律（重试换新 `run_id` 并用 `parent_run_id`）；两阶段独立审查收据（两个 reviewer 不同、每条发现都有处置；本地只能校验收据一致性，不能证明审查真的发生）。**证据齐备或不可用，没有第三种结论**；记录互相矛盾就是失败。
 
-本地/T4 通过不是目标芯片通过。KernelGen 工具、配置文件存在或工具握手都不是发布证据（其 MCP 工具本会话未注册，专精知识库只覆盖华为）。`competition.pr check` 的“全过”只覆盖本地能跑的闸门，不等于上游 CI 通过或可以合并。
+本地/T4 通过不是目标芯片通过。KernelGen 工具、配置文件存在或工具握手都不是发布证据（其 MCP 工具本会话未注册，专精知识库只覆盖华为）。本地闸门“全过”只覆盖本机能跑的检查，不等于官方 harness 通过。
