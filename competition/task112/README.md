@@ -35,21 +35,42 @@ Split-KV attention 的 "combine" 一半：把 `N` 个 decode-context-parallel ra
 
 ## 验证状态（必须分清）
 
-已验证（本机、无 torch）：
+### 已验证
+
+**CPU 语义证据（本机，torch 2.14.1 CPU，无 GPU）**
+
+```sh
+competition/.local/.venv-cpu/bin/python competition/task112/validate_cpu.py --verbose
+```
+
+共享 CPU 语义模型 `competition/experiments/cpu_model.py`（与 Task 60/78 同一实现）逐 program 串行执行真实的 Triton JIT 体，检查：真实 wrapper 与启动路径、每个输出元素恰好写一次且在返回视图内、输入与底层存储未被改动、以及数值与官方参考在本题容差内一致。
+
+- **8/8 通过**，含 `n4-dead-shard`（NaN 与 `+inf` 必须消失）、`n8-base2-lse`（`exp2`/`log2` 分支）、`n1-single`（单 shard 退化）与两种 `return_lse` 返回形态；证据（含命令、torch 版本、逐例结果）保存在忽略目录 `.local/runs/20261001T134448-d77aa81e/cpu-semantic.txt`。
+- **否证对照**（证明验证器真的会咬，而不是空过）：删掉 NaN/+inf 净化 → 在 `n4-dead-shard.out` 失败；把 base-2 分支改成总是 `exp` → 在 `n8-base2-lse.out` 失败。两条都已记录在同一证据文件里。
+- **为跑通它给共享模型补了加法项**（不改变既有检查语义）：`Ptr.dtype.element_ty`（`value.to(out_ptr.dtype.element_ty)` 需要）、`tl.exp/exp2/log/log2/zeros/full`。补之前 CPU 模型会直接对未支持算子报 `NotImplementedError`。
+
+**契约与结构**
 
 - `competition.adaptation inspect --task task112 --refresh` → 七目标与官方一致，`contract_drift: false`；
 - `competition.adaptation members --task task112 --source competition/task112` → 包布局通过，并给出"7/7 目标共用 generic"这一预期内的 warning；
 - `competition.adaptation decide --task task112` → 聚合模型 `unverified`、七目标全部 `blocked_no_eligible_result`（无观测时拒绝给出边际收益）；
-- `competition.task112.test_task` 19 项离线检查：profile 与官方契约一致、adapter 暴露 harness 六个接口且 `reference` 签名一致、用例表覆盖全部分支、候选模块 `__all__`/公共入口/无 `try-except`/仅使用允许的 torch 调用；
-- 首轮 run 已冻结：`20261001T133618-4388ba8b`，快照 `64fe04f9…`，`source_method: agent-authored`。
+- `competition.task112.test_task` 19 项离线检查：profile 与官方契约一致、adapter 暴露 harness 六个接口且 `reference` 签名一致、用例表覆盖全部分支、候选模块 `__all__`/公共入口/无 `try-except`/仅使用允许的 torch 调用。
 
-未验证（当前无法验证）：
+**冻结 run**
 
-- **任何数值正确性**：本机没有 torch/triton；`competition/task112/dcp_lse_combine.py` 从未执行过。
-- **任何设备行为与性能**：租用设备不可达（见 runbook 节点 61/62 的设备约束）。
-- **官方用例集与 baseline 包**：平台不公开。
+| run | 快照 | 源码 sha256 | 假设 |
+|---|---|---|---|
+| `20261001T133618-4388ba8b` | `64fe04f9…` | 编辑前版本 | baseline 同构两遍实现可复现官方语义 |
+| `20261001T134448-d77aa81e`（parent 上一条） | `b8a84e2d…` | `db712e60…` | 去掉 `program_id` 的 int64 提升与 `return_lse=False` 时的无用分配后语义不变 |
+
+### 未验证（当前无法验证）
+
+- **目标芯片正确性、设备行为与任何性能数据**：CPU 语义模型明确不提供这些（`LIMIT` 行每次都打印），租用设备仍不可达（`doctor --device t4` → `SSH scratch creation failed`）。
+- **官方用例集与 baseline 包**：平台不公开；本表的形状/容差来源是其"参考"而非官方判定。
+- **未做过的优化**：当前候选是 baseline 同构起点，还没有任何结构性改进，也没有任何速度证据。
 
 ## 下一步
 
-1. 需要有 torch+triton 的环境（租用设备或平台机）跑 `test`/`bench`，才能把这份候选从"未执行"变成"CPU/设备语义通过"；
-2. 提交需要用户在具体批次/团队范围上的显式授权。
+1. CPU 语义回路已可用，可以在无设备时继续做**语义安全**的结构改动（例如在线单遍合并、D 拆分、每 program 多 `(b,h)`），每次改动都必须新建 run 并重跑 `validate_cpu`；
+2. 真正的性能判定仍需要设备或平台评测：租用设备需要新的隧道端点，平台评测需要用户在批次/团队范围内的显式授权。
+

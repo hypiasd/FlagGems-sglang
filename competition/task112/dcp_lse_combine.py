@@ -54,8 +54,8 @@ def _dcp_lse_combine_kernel(
     IS_BASE_E: tl.constexpr,
     RETURN_LSE: tl.constexpr,
 ):
-    batch = tl.program_id(0).to(tl.int64)
-    head = tl.program_id(1).to(tl.int64)
+    batch = tl.program_id(0)
+    head = tl.program_id(1)
     d = tl.arange(0, D_BLOCK)
     lse_base = batch * l_stride_b + head * l_stride_h
 
@@ -121,19 +121,17 @@ def dcp_lse_combine(recv_output, recv_lse, is_lse_base_on_e, return_lse):
     out = torch.empty(
         (batch, head, dim), device=recv_output.device, dtype=recv_output.dtype
     )
-    out_lse = (
-        torch.empty(
+    if return_lse:
+        out_lse = torch.empty(
             (batch, head), device=recv_lse.device, dtype=recv_lse.dtype
         )
-        if return_lse
-        else recv_lse.new_empty(0)
-    )
-    block = triton.next_power_of_2(dim)
-    if return_lse:
         lr_stride_b, lr_stride_h = out_lse.stride(0), out_lse.stride(1)
     else:
-        # ``out_lse`` is a 1-element placeholder here; its strides are unused.
+        # Unused by the kernel when RETURN_LSE is False, so no allocation is
+        # paid for it; the pointer only has to be a valid tensor argument.
+        out_lse = recv_lse
         lr_stride_b = lr_stride_h = 0
+    block = triton.next_power_of_2(dim)
     _dcp_lse_combine_kernel[(batch, head)](
         recv_output,
         recv_lse,

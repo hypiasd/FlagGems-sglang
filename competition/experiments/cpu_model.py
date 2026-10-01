@@ -1,23 +1,22 @@
 """Bounded CPU Triton model; provides no device or performance evidence."""
+
 from __future__ import annotations
 
 import argparse
-from collections import Counter
-from contextlib import contextmanager
-from dataclasses import dataclass
 import functools
 import hashlib
 import inspect
 import itertools
 import json
-from pathlib import Path
 import sys
+from collections import Counter
+from contextlib import contextmanager
+from dataclasses import dataclass
+from pathlib import Path
 from types import ModuleType
 from unittest.mock import patch
 
 import torch
-
-
 
 
 class ValidationError(AssertionError):
@@ -45,18 +44,24 @@ def storage_key(tensor):
 
 
 def logical_offsets(tensor):
-    offsets = torch.full(tensor.shape, tensor.storage_offset(), dtype=torch.int64)
+    offsets = torch.full(
+        tensor.shape, tensor.storage_offset(), dtype=torch.int64
+    )
     for axis, (size, stride) in enumerate(zip(tensor.shape, tensor.stride())):
         shape = [1] * tensor.ndim
         shape[axis] = size
-        offsets += torch.arange(size, dtype=torch.int64).reshape(shape) * stride
+        offsets += (
+            torch.arange(size, dtype=torch.int64).reshape(shape) * stride
+        )
     return offsets.reshape(-1)
 
 
 def offset_tensor(value):
     value = torch.as_tensor(value, device="cpu")
-    require(value.dtype in (torch.int8, torch.int16, torch.int32, torch.int64),
-            "pointer offsets must be integers")
+    require(
+        value.dtype in (torch.int8, torch.int16, torch.int32, torch.int64),
+        "pointer offsets must be integers",
+    )
     return value.to(torch.int64)
 
 
@@ -67,6 +72,13 @@ class Allocation:
         self.writes = torch.zeros(self.storage.numel(), dtype=torch.int64)
 
 
+class _ElementDtype:
+    """Minimal stand-in for the element type of a Triton pointer."""
+
+    def __init__(self, element_ty):
+        self.element_ty = element_ty
+
+
 class Ptr:
     """Element pointer whose offset is always a CPU int64 torch tensor."""
 
@@ -75,8 +87,15 @@ class Ptr:
         self.allowed = allowed
         self.offsets = offset_tensor(offsets)
 
+    @property
+    def dtype(self):
+        """Mirror ``ptr.dtype.element_ty`` so casts to the output dtype run."""
+        return _ElementDtype(self.allocation.storage.dtype)
+
     def __add__(self, other):
-        return Ptr(self.allocation, self.allowed, self.offsets + offset_tensor(other))
+        return Ptr(
+            self.allocation, self.allowed, self.offsets + offset_tensor(other)
+        )
 
     __radd__ = __add__
 
@@ -94,11 +113,15 @@ class Ptr:
         addresses = self.offsets[mask]
         size = self.allocation.storage.numel()
         invalid = (addresses < 0) | (addresses >= size)
-        require(not invalid.any(),
-                f"{operation}: active address outside storage [0, {size}): "
-                f"{addresses[invalid][:8].tolist()}")
-        require(self.allowed[addresses].all(),
-                f"{operation}: active address outside the passed tensor view")
+        require(
+            not invalid.any(),
+            f"{operation}: active address outside storage [0, {size}): "
+            f"{addresses[invalid][:8].tolist()}",
+        )
+        require(
+            self.allowed[addresses].all(),
+            f"{operation}: active address outside the passed tensor view",
+        )
         return mask, addresses
 
 
@@ -106,7 +129,9 @@ class RestrictedModule(ModuleType):
     def __getattr__(self, name):
         if name.startswith("__"):
             raise AttributeError(name)
-        raise NotImplementedError(f"unsupported CPU-model operation: {self.__name__}.{name}")
+        raise NotImplementedError(
+            f"unsupported CPU-model operation: {self.__name__}.{name}"
+        )
 
 
 class PythonJIT:
@@ -122,7 +147,10 @@ class PythonJIT:
 
     def __getitem__(self, grid):
         def launch(*args, **kwargs):
-            require(self.model.call is not None, "kernel launched outside a validation call")
+            require(
+                self.model.call is not None,
+                "kernel launched outside a validation call",
+            )
             kwargs = dict(kwargs)
             configs = getattr(self, "autotune_configs", [])
             if configs:
@@ -137,12 +165,16 @@ class PythonJIT:
             # Unknown options/arguments must fail; do not silently drop them.
             bound = self.signature.bind(*args, **kwargs)
             bound.apply_defaults()
-            launch_grid = grid(dict(bound.arguments)) if callable(grid) else grid
+            launch_grid = (
+                grid(dict(bound.arguments)) if callable(grid) else grid
+            )
             if isinstance(launch_grid, int):
                 launch_grid = (launch_grid,)
             launch_grid = tuple(int(x) for x in launch_grid)
-            require(1 <= len(launch_grid) <= 3 and all(x > 0 for x in launch_grid),
-                    f"invalid launch grid: {launch_grid}")
+            require(
+                1 <= len(launch_grid) <= 3 and all(x > 0 for x in launch_grid),
+                f"invalid launch grid: {launch_grid}",
+            )
             launch_grid += (1,) * (3 - len(launch_grid))
             for name, value in bound.arguments.items():
                 if isinstance(value, torch.Tensor):
@@ -150,9 +182,12 @@ class PythonJIT:
             call = self.model.call
             call.launches.append((self.__name__, launch_grid))
             total_programs = launch_grid[0] * launch_grid[1] * launch_grid[2]
-            require(call.max_programs is None or total_programs <= call.max_programs,
-                    f"total launch grid {launch_grid} has {total_programs} programs; "
-                    f"limit is {call.max_programs}")
+            require(
+                call.max_programs is None
+                or total_programs <= call.max_programs,
+                f"total launch grid {launch_grid} has {total_programs} programs; "
+                f"limit is {call.max_programs}",
+            )
             self.model.grid = launch_grid
             try:
                 for pid in itertools.product(*(range(n) for n in launch_grid)):
@@ -165,6 +200,7 @@ class PythonJIT:
                         ) from exc
             finally:
                 self.model.pid = self.model.grid = None
+
         return launch
 
 
@@ -189,7 +225,16 @@ class CPUModel:
         self.triton.heuristics = self.identity_decorator
         self.triton.Config = self.KernelConfig
         self.tl.constexpr = type("constexpr", (), {})
-        for name in ("int8", "int16", "int32", "int64", "float16", "bfloat16", "float32", "float64"):
+        for name in (
+            "int8",
+            "int16",
+            "int32",
+            "int64",
+            "float16",
+            "bfloat16",
+            "float32",
+            "float64",
+        ):
             setattr(self.tl, name, getattr(torch, name))
         self.tl.program_id = self.program_id
         self.tl.num_programs = self.num_programs
@@ -199,12 +244,30 @@ class CPUModel:
         self.tl.broadcast_to = torch.broadcast_to
         self.tl.multiple_of = lambda value, _alignment: value
         self.tl.max_contiguous = lambda value, _alignment: value
-        self.tl.maximum = lambda x, y: torch.maximum(torch.as_tensor(x), torch.as_tensor(y))
+        self.tl.maximum = lambda x, y: torch.maximum(
+            torch.as_tensor(x), torch.as_tensor(y)
+        )
+        # Elementwise math and constructors used by attention-style kernels.
+        # Additions only: they change no existing indexing or coverage check.
+        self.tl.exp = torch.exp
+        self.tl.exp2 = torch.exp2
+        self.tl.log = torch.log
+        self.tl.log2 = torch.log2
+        self.tl.zeros = lambda shape, dtype=None: torch.zeros(
+            shape, dtype=dtype if dtype is not None else torch.float32
+        )
+        self.tl.full = lambda shape, value, dtype=None: torch.full(
+            shape, value, dtype=dtype if dtype is not None else torch.float32
+        )
         self.tl.load = self.load
         self.tl.store = self.store
 
     def jit(self, function=None):
-        return (lambda fn: PythonJIT(fn, self)) if function is None else PythonJIT(function, self)
+        return (
+            (lambda fn: PythonJIT(fn, self))
+            if function is None
+            else PythonJIT(function, self)
+        )
 
     class KernelConfig:
         def __init__(self, values=None, **kwargs):
@@ -235,11 +298,17 @@ class CPUModel:
         return 1 << (int(value) - 1).bit_length()
 
     def program_id(self, axis=0):
-        require(self.pid is not None and axis in (0, 1, 2), "invalid program_id context/axis")
+        require(
+            self.pid is not None and axis in (0, 1, 2),
+            "invalid program_id context/axis",
+        )
         return torch.tensor(self.pid[axis], dtype=torch.int64)
 
     def num_programs(self, axis=0):
-        require(self.grid is not None and axis in (0, 1, 2), "invalid num_programs context/axis")
+        require(
+            self.grid is not None and axis in (0, 1, 2),
+            "invalid num_programs context/axis",
+        )
         return torch.tensor(self.grid[axis], dtype=torch.int64)
 
     @staticmethod
@@ -250,26 +319,42 @@ class CPUModel:
     @staticmethod
     def arange(start, end):
         start, end = int(start), int(end)
-        require(start == 0 and end > 0 and end & (end - 1) == 0,
-                "CPU model supports only tl.arange(0, positive_power_of_two)")
+        require(
+            start == 0 and end > 0 and end & (end - 1) == 0,
+            "CPU model supports only tl.arange(0, positive_power_of_two)",
+        )
         return torch.arange(start, end, dtype=torch.int64)
 
     @staticmethod
     def load(pointer, mask=None, other=None, **kwargs):
         unsupported = set(kwargs) - {
-            "cache_modifier", "eviction_policy", "padding_option",
-            "boundary_check", "volatile",
+            "cache_modifier",
+            "eviction_policy",
+            "padding_option",
+            "boundary_check",
+            "volatile",
         }
-        require(not unsupported, f"tl.load unsupported keyword(s): {sorted(unsupported)}")
+        require(
+            not unsupported,
+            f"tl.load unsupported keyword(s): {sorted(unsupported)}",
+        )
         require(isinstance(pointer, Ptr), "tl.load requires a Ptr")
         active, addresses = pointer.active(mask, "load")
         allocation = pointer.allocation
         if not allocation.readonly:
-            require((allocation.writes[addresses] == 1).all(), "load from unwritten output")
+            require(
+                (allocation.writes[addresses] == 1).all(),
+                "load from unwritten output",
+            )
         if other is None:
-            require(active.all(), "masked tl.load requires explicit other in this CPU model")
+            require(
+                active.all(),
+                "masked tl.load requires explicit other in this CPU model",
+            )
             other = 0
-        values = torch.as_tensor(other, dtype=allocation.storage.dtype, device="cpu")
+        values = torch.as_tensor(
+            other, dtype=allocation.storage.dtype, device="cpu"
+        )
         values = torch.broadcast_to(values, pointer.offsets.shape).clone()
         values[active] = allocation.storage[addresses]
         return values
@@ -277,24 +362,37 @@ class CPUModel:
     @staticmethod
     def store(pointer, value, mask=None, **kwargs):
         unsupported = set(kwargs) - {"cache_modifier", "eviction_policy"}
-        require(not unsupported, f"tl.store unsupported keyword(s): {sorted(unsupported)}")
+        require(
+            not unsupported,
+            f"tl.store unsupported keyword(s): {sorted(unsupported)}",
+        )
         require(isinstance(pointer, Ptr), "tl.store requires a Ptr")
         active, addresses = pointer.active(mask, "store")
         allocation = pointer.allocation
-        require(not allocation.readonly or addresses.numel() == 0,
-                "store to protected input/k backing storage")
+        require(
+            not allocation.readonly or addresses.numel() == 0,
+            "store to protected input/k backing storage",
+        )
         unique, counts = addresses.unique(return_counts=True)
-        require((counts == 1).all(), "duplicate output writes within one store")
-        require((allocation.writes[unique] == 0).all(),
-                "duplicate output writes across stores/programs/launches")
-        values = torch.as_tensor(value, dtype=allocation.storage.dtype, device="cpu")
+        require(
+            (counts == 1).all(), "duplicate output writes within one store"
+        )
+        require(
+            (allocation.writes[unique] == 0).all(),
+            "duplicate output writes across stores/programs/launches",
+        )
+        values = torch.as_tensor(
+            value, dtype=allocation.storage.dtype, device="cpu"
+        )
         values = torch.broadcast_to(values, pointer.offsets.shape)
         allocation.storage[addresses] = values[active]
         allocation.writes[unique] += 1
 
     @contextmanager
     def installed(self):
-        with patch.dict(sys.modules, {"triton": self.triton, "triton.language": self.tl}):
+        with patch.dict(
+            sys.modules, {"triton": self.triton, "triton.language": self.tl}
+        ):
             yield
 
 
@@ -310,63 +408,124 @@ class ValidationCall:
             key = storage_key(tensor)
             if key not in self.allocations:
                 self.allocations[key] = Allocation(tensor, readonly=True)
-            self.snapshots.append((tensor, key, tensor.shape, tensor.stride(),
-                                   tensor.storage_offset(), tensor._version,
-                                   storage_vector(tensor).view(torch.uint8).clone()))
+            self.snapshots.append(
+                (
+                    tensor,
+                    key,
+                    tensor.shape,
+                    tensor.stride(),
+                    tensor.storage_offset(),
+                    tensor._version,
+                    storage_vector(tensor).view(torch.uint8).clone(),
+                )
+            )
 
     def register_output(self, tensor):
         """Only the actual torch.empty result may become a writable argument."""
         key = storage_key(tensor)
-        require(key not in self.allocations, "output allocation aliases an existing tensor")
+        require(
+            key not in self.allocations,
+            "output allocation aliases an existing tensor",
+        )
         self.outputs[id(tensor)] = tensor
         self.allocations[key] = Allocation(tensor, readonly=False)
         return tensor
 
     def pointer(self, tensor):
         key = storage_key(tensor)
-        require(key in self.allocations, "unregistered tensor argument; expected input or allocated output")
+        require(
+            key in self.allocations,
+            "unregistered tensor argument; expected input or allocated output",
+        )
         allocation = self.allocations[key]
-        require(allocation.readonly or self.outputs.get(id(tensor)) is tensor,
-                "writable argument must be the allocated output tensor by identity")
-        require(tensor.dtype == allocation.storage.dtype, "dtype-reinterpreted aliases are unsupported")
-        view_key = (key, tuple(tensor.shape), tensor.stride(), tensor.storage_offset())
+        require(
+            allocation.readonly or self.outputs.get(id(tensor)) is tensor,
+            "writable argument must be the allocated output tensor by identity",
+        )
+        require(
+            tensor.dtype == allocation.storage.dtype,
+            "dtype-reinterpreted aliases are unsupported",
+        )
+        view_key = (
+            key,
+            tuple(tensor.shape),
+            tensor.stride(),
+            tensor.storage_offset(),
+        )
         if view_key not in self.pointers:
             allowed = torch.zeros(allocation.storage.numel(), dtype=torch.bool)
             allowed[logical_offsets(tensor)] = True
-            self.pointers[view_key] = Ptr(allocation, allowed, tensor.storage_offset())
+            self.pointers[view_key] = Ptr(
+                allocation, allowed, tensor.storage_offset()
+            )
         return self.pointers[view_key]
 
     def check_inputs(self):
-        for tensor, key, shape, strides, offset, version, before in self.snapshots:
-            require(storage_key(tensor) == key and tensor.shape == shape
-                    and tensor.stride() == strides and tensor.storage_offset() == offset,
-                    "input/k storage or metadata mutated")
+        for (
+            tensor,
+            key,
+            shape,
+            strides,
+            offset,
+            version,
+            before,
+        ) in self.snapshots:
+            require(
+                storage_key(tensor) == key
+                and tensor.shape == shape
+                and tensor.stride() == strides
+                and tensor.storage_offset() == offset,
+                "input/k storage or metadata mutated",
+            )
             require(tensor._version == version, "input/k modified in place")
-            require(torch.equal(storage_vector(tensor).view(torch.uint8), before),
-                    "input/k backing storage mutated (including view padding)")
+            require(
+                torch.equal(storage_vector(tensor).view(torch.uint8), before),
+                "input/k backing storage mutated (including view padding)",
+            )
 
     def check_output(self, output, expected):
-        require(isinstance(output, torch.Tensor), "wrapper did not return a torch.Tensor")
+        require(
+            isinstance(output, torch.Tensor),
+            "wrapper did not return a torch.Tensor",
+        )
         require(output.device.type == "cpu", "wrapper output must stay on CPU")
-        require(output.shape == expected.shape and output.dtype == expected.dtype,
-                f"wrong output shape/dtype: {output.shape}/{output.dtype}")
+        require(
+            output.shape == expected.shape and output.dtype == expected.dtype,
+            f"wrong output shape/dtype: {output.shape}/{output.dtype}",
+        )
         require(output.is_contiguous(), "output must be contiguous")
         key = storage_key(output)
         allocation = self.allocations.get(key)
-        require(allocation is None or not allocation.readonly, "output aliases input/k storage")
-        require(self.outputs.get(id(output)) is output,
-                "returned tensor is not the wrapper's allocated output by identity")
+        require(
+            allocation is None or not allocation.readonly,
+            "output aliases input/k storage",
+        )
+        require(
+            self.outputs.get(id(output)) is output,
+            "returned tensor is not the wrapper's allocated output by identity",
+        )
         if output.numel() == 0:
-            require(not self.launches, f"empty output launched kernels: {self.launches}")
+            require(
+                not self.launches,
+                f"empty output launched kernels: {self.launches}",
+            )
             return
-        require(self.launches,
-                "nonempty output launched no kernels")
-        require(allocation is not None, "returned output was never passed to a kernel")
+        require(self.launches, "nonempty output launched no kernels")
+        require(
+            allocation is not None,
+            "returned output was never passed to a kernel",
+        )
         indices = logical_offsets(output)
         counts = allocation.writes[indices]
-        require((counts == 1).all(),
-                f"output write coverage: missing={(counts == 0).sum().item()}, "
-                f"multiple={(counts > 1).sum().item()}")
-        require(allocation.writes.sum().item() == output.numel(),
-                "kernel wrote outside the returned output view")
-        torch.testing.assert_close(output, expected, rtol=0, atol=0, equal_nan=True)
+        require(
+            (counts == 1).all(),
+            f"output write coverage: missing={(counts == 0).sum().item()}, "
+            f"multiple={(counts > 1).sum().item()}",
+        )
+        require(
+            allocation.writes.sum().item() == output.numel(),
+            "kernel wrote outside the returned output view",
+        )
+        torch.testing.assert_close(
+            output, expected, rtol=0, atol=0, equal_nan=True
+        )

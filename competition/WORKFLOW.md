@@ -59,6 +59,15 @@ python -m competition.experiments report --run RUN_ID
 
 `--source` 可以指定公开入口源码文件，或含题目声明成员的目录。`test --all-sources` 验证快照中的全部成员；默认只验证通用入口。`--cases CASE_ID ...` 选择明确的受影响用例，未知 ID 被拒绝。完整开发矩阵通过仍不声明官方用例覆盖。
 
+### 无设备时的语义回路
+
+设备不可达时，仍有一条**纯语义**回路：`competition/<task>/validate_cpu.py` 通过共享的 `competition/experiments/cpu_model.py`（Task 60/78/112 同一实现）逐 program 串行执行**真实的 Triton JIT 体**（用 CPU torch），检查真实启动路径、每个输出元素恰好写一次且在返回视图内、输入与底层存储未被改动、以及数值与参考在本题容差内。
+
+- **这是语义证据，永远不是设备或性能证据**；每次运行都打印 `LIMIT` 行，不得把它写成目标芯片正确性或加速比。
+- **必须带否证对照**：故意破坏一个语义分支（例如删掉 NaN 净化、把 base-2 分支改成总是 `exp`），确认验证器在**对应那条用例**上失败。没有否证对照的"全过"没有信息量，也不写进任何报告。
+- **环境**（本机实测）：共享模型自己桩 `triton`，所以只要 CPU torch，不需要真实 Triton。用 `uv` 建隔离环境到忽略目录：`uv venv --python 3.12 .local/.venv-cpu`，再 `uv pip install --python .local/.venv-cpu/bin/python --index-url https://download.pytorch.org/whl/cpu torch`（PyTorch CPU 索引可达；PyPI 直连此前被挡）。
+- **证据要绑到冻结字节**：改了源码必须新建 run，并对**该 run 的 `source/` 文件**运行验证，把输出（命令、torch 版本、逐例结果、否证对照）存进 `.local/runs/<run>/cpu-semantic.txt`。`validate_cpu.py` 本身不在 run 的 harness 快照内，可以随时修工具而不作废 run；`adapter.py` 在快照内，改它就要新建 run。
+
 ### 计时与预算
 
 | 模式 | bench 阶段墙钟预算 | 样本组 | 每组目标 | 重复上限 | 远端进程硬超时 |
