@@ -88,6 +88,24 @@ def _distributed_prefix():
     return ()
 
 
+def _hook_registered(hook):
+    """Whether a launch hook would actually run, i.e. whether its metadata is used.
+
+    Triton 3.6 ships an *empty* ``HookChain`` in ``knobs.runtime.*_hook``, which is
+    not ``None``; ``CompiledKernel.launch_metadata`` therefore builds a
+    ``LazyDict`` over all fifteen arguments on every call and nobody ever reads
+    it -- measured 1.9 us per call on T4.  ``HookChain.calls`` is a public list,
+    so an empty chain is detectable without touching exceptions.  Anything that
+    is not a ``HookChain`` is treated as registered.
+    """
+    if hook is None:
+        return False
+    calls = getattr(hook, "calls", None)
+    if calls is None:
+        return True
+    return bool(calls)
+
+
 def _fast_launcher(compiled, grid, hooks, get_stream):
     """Direct launch on the compiled kernel, or ``None`` to keep the public path.
 
@@ -266,9 +284,11 @@ def conv_window_scatter_with_mask(dst, src, dst_indices_raw, step_indices_raw):
         row_length = dim * window
         row_block = min(triton.next_power_of_2(max(row_length, 1)), _ROW_CAP)
         chunks = triton.cdiv(row_length, row_block)
-        plan = {
-            "grid": (layers * cache * chunks,),
-            "tail": torch.tensor(
+        # A list, because the first call flips slot 5 from "undecided" to the
+        # chosen launch form; unpacking a list is the cheapest read of the rest.
+        plan = [
+            (layers * cache * chunks,),
+            torch.tensor(
                 [
                     dst.stride(0),
                     dst.stride(1),
@@ -288,16 +308,15 @@ def conv_window_scatter_with_mask(dst, src, dst_indices_raw, step_indices_raw):
                 device=dst.device,
             ),
             # Order must match the kernel signature, but positionally.
-            "consts": (cache, dim, window, chunks, row_block, requests),
-            "hooks": _runtime_hooks(),
-            "get_stream": _stream_getter(),
-            "launch": None,  # None = undecided, False = public path, tuple = fast
-        }
+            (cache, dim, window, chunks, row_block, requests),
+            _runtime_hooks(),
+            _stream_getter(),
+            None,  # launch: None = undecided, False = public path, tuple = direct
+        ]
         _PLANS[key] = plan
 
-    grid, tail, consts = plan["grid"], plan["tail"], plan["consts"]
+    grid, tail, consts, hooks, get_stream, launch = plan
     args = (dst, src, dst_indices_raw, step_indices_raw, out, tail, *consts)
-    launch = plan["launch"]
     if launch is False:
         _conv_window_scatter_kernel[grid](*args)
         return out
@@ -305,11 +324,10 @@ def conv_window_scatter_with_mask(dst, src, dst_indices_raw, step_indices_raw):
         # First call: take the public path -- which also compiles -- and keep the
         # compiled kernel it returns for the direct launch from here on.
         compiled = _conv_window_scatter_kernel[grid](*args)
-        get_stream = plan["get_stream"]
         launch = None
         if get_stream is not None:
-            launch = _fast_launcher(compiled, grid, plan["hooks"], get_stream)
-        plan["launch"] = launch if launch is not None else False
+            launch = _fast_launcher(compiled, grid, hooks, get_stream)
+        plan[5] = launch if launch is not None else False
         return out
     (
         run,
@@ -325,6 +343,9 @@ def conv_window_scatter_with_mask(dst, src, dst_indices_raw, step_indices_raw):
         get_stream,
     ) = launch
     stream = get_stream()
+    metadata = None
+    if _hook_registered(enter_hook) or _hook_registered(exit_hook):
+        metadata = launch_metadata(grid, stream, *args)
     run(
         grid_x,
         grid_y,
@@ -332,7 +353,7 @@ def conv_window_scatter_with_mask(dst, src, dst_indices_raw, step_indices_raw):
         stream,
         function,
         packed,
-        launch_metadata(grid, stream, *args),
+        metadata,
         enter_hook,
         exit_hook,
         *prefix,
