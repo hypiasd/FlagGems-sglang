@@ -18,6 +18,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from . import evidence as evidence_mod
 from . import spec
 
 PASS, FAIL, SKIPPED, UNAVAILABLE = "pass", "fail", "skipped", "unavailable"
@@ -416,6 +417,75 @@ def _suffix_of(bundle: dict, rel: str) -> str | None:
         if item["path"] == rel:
             return item.get("suffix")
     return None
+
+
+def evidence_gate(report: dict) -> dict:
+    """Fold the evidence discipline into the gate summary.
+
+    Contradictory recorded evidence fails.  Evidence that simply does not
+    exist here (no callable target route, no review receipts, provisional
+    platform values) keeps the gate ``unavailable``, so ``ready_for_pr`` still
+    means "nothing we can run has failed" rather than "this is validated".
+    """
+    official = report.get("official") or {}
+    errors = []
+    for item in official.get("lifecycle") or []:
+        errors.extend(
+            f"{item.get('record_id')}: {problem}"
+            for problem in item.get("errors") or []
+        )
+    review = report.get("review") or {}
+    errors.extend(review.get("errors") or [])
+    gaps = list(review.get("gaps") or [])
+    capability = report.get("capability") or {}
+    callable_routes = [
+        name
+        for name, state in capability.items()
+        if state == evidence_mod.CALLABLE
+    ]
+    missing = list(report.get("missing_target_evidence") or [])
+    provisional = official.get("provisional_records") or []
+    if not callable_routes:
+        gaps.append(
+            "no callable target route; capability is "
+            + ", ".join(f"{k}={v}" for k, v in sorted(capability.items()))
+        )
+    for name in missing:
+        state = (report.get("targets") or {}).get(name) or {}
+        gaps.append(f"{name}: {state.get('basis')}")
+    if provisional:
+        gaps.append(
+            f"{len(provisional)} provisional platform record(s) quoted, "
+            "never aggregated"
+        )
+    if errors:
+        detail = "; ".join(errors[:12])
+    elif gaps:
+        detail = "unestablished here: " + "; ".join(gaps[:12])
+    else:
+        detail = "every target carries terminal per-source official evidence"
+    return _gate(
+        "evidence",
+        FAIL if errors else (UNAVAILABLE if gaps else PASS),
+        detail,
+        capability=capability,
+        package_state=report.get("package_state"),
+        missing_target_evidence=missing,
+        best_per_target=report.get("best_per_target") or {},
+        best_aggregate_speedup=official.get("best_aggregate_speedup"),
+        best_aggregate_record_id=official.get("best_aggregate_record_id"),
+        provisional_records=[item.get("record_id") for item in provisional],
+        superseded_records=[
+            item.get("record_id")
+            for item in official.get("superseded_records") or []
+        ],
+        review={
+            "verified": review.get("verified"),
+            "authenticated": review.get("authenticated"),
+            "gaps": review.get("gaps") or [],
+        },
+        official_score_computed=bool(official.get("official_score_computed")),
+    )
 
 
 def summarize(gates: list[dict]) -> dict:

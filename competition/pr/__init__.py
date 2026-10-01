@@ -2,6 +2,6 @@
 
 from __future__ import annotations
 
-from . import bundle, description, gates, spec  # noqa: F401
+from . import bundle, description, evidence, gates, spec  # noqa: F401
 
-__all__ = ["bundle", "description", "gates", "spec"]
+__all__ = ["bundle", "description", "evidence", "gates", "spec"]

@@ -13,6 +13,12 @@ Usage::
     python -m competition.pr bundle --task task103 --adaptation adapt-1ba6bd8a83ce
     python -m competition.pr materialize --task task103 --adaptation adapt-1ba6bd8a83ce
     python -m competition.pr check --task task103 --adaptation adapt-1ba6bd8a83ce
+    python -m competition.pr evidence --task task103 --adaptation adapt-1ba6bd8a83ce
+
+``evidence`` reuses the KernelGen reliability-gate methodology: it states, per
+target, which evidence state we are entitled to claim, keeps provisional
+platform readings out of any aggregate, and refuses to turn "no target
+evidence" into a pass.  See ``competition/pr/evidence.py``.
 """
 
 from __future__ import annotations
@@ -21,16 +27,87 @@ import argparse
 import json
 from pathlib import Path
 
-from competition.experiments.store import LOCAL, ROOT, load_json, write_json
+from competition.experiments.store import (
+    LOCAL,
+    ROOT,
+    digest,
+    load_json,
+    write_json,
+)
 
 from . import bundle as bundle_mod
-from . import description, gates, spec
+from . import description, evidence, gates, spec
 
 DEFAULT_TOOLS = LOCAL / "venv-pr" / "bin"
 
 
 def _dir(task: str, adaptation: str) -> Path:
     return bundle_mod.PR_ROOT / task / adaptation
+
+
+def _records(task: str, package_sha256: str) -> list[dict]:
+    """Official observations bound to this exact package digest.
+
+    The platform exposes no record ID, so a record is bound to an archive by
+    its SHA-256 and keyed by submission time.
+    """
+    path = ROOT / "competition" / task / "official-records.jsonl"
+    if not path.is_file():
+        return []
+    rows = []
+    for line in path.read_text().splitlines():
+        if not line.strip():
+            continue
+        record = json.loads(line)
+        if (
+            package_sha256
+            and record.get("local_archive_sha256") != package_sha256
+        ):
+            continue
+        rows.append(record)
+    return rows
+
+
+def _evidence_report(task: str, adaptation: str, dest: Path) -> dict:
+    """Build the per-target evidence report from the local artifacts.
+
+    Capability is classified rather than assumed: the official platform
+    channel is ``callable`` only if its local driver exists, and the rented
+    device route is ``configured_unavailable`` because a configured tunnel is
+    not a working device.  Reachability is deliberately not probed here.
+    """
+    profile = load_json(ROOT / "competition" / task / "profile.json")
+    source = LOCAL / "adaptations" / adaptation
+    release = load_json(source / "release.json")
+    archive = source / "package.zip"
+    package_sha256 = digest(archive) if archive.is_file() else ""
+    gates_path = dest / "gates.json"
+    local_gates = load_json(gates_path) if gates_path.is_file() else {}
+    routes = [
+        {
+            "name": "official_platform",
+            "config_present": True,
+            "in_tool_registry": (LOCAL / "browser" / "submit.mjs").is_file(),
+            "reachable": bool(_records(task, package_sha256)),
+        },
+        {
+            "name": "rented_device",
+            "config_present": True,
+            "in_tool_registry": False,
+            "reachable": False,
+        },
+    ]
+    return evidence.derive_report(
+        task_id=task,
+        adaptation_id=adaptation,
+        profile_targets=list(profile["targets"]),
+        release=release,
+        records=_records(task, package_sha256),
+        package_sha256=package_sha256,
+        routes=routes,
+        local_gates=local_gates,
+        reviews=release.get("reviews") or [],
+    )
 
 
 def cmd_rules(args) -> dict:
@@ -149,9 +226,49 @@ def cmd_check(args) -> dict:
         results.append(
             gates._gate("import_smoke", gates.UNAVAILABLE, "no upstream tree")
         )
+    base = gates.summarize(results)
+    report = _evidence_report(args.task, args.adaptation, dest)
+    report["local_gates"] = {
+        "ready_for_pr": base["ready_for_pr"],
+        "failed": base["failed"],
+        "not_run_here": base["not_run_here"],
+    }
+    write_json(dest / "evidence.json", report)
+    results.append(gates.evidence_gate(report))
     summary = gates.summarize(results)
     write_json(dest / "gates.json", summary)
     return summary
+
+
+def cmd_evidence(args) -> dict:
+    """Write the per-target evidence report and a run-record skeleton."""
+    dest = _dir(args.task, args.adaptation)
+    report = _evidence_report(args.task, args.adaptation, dest)
+    write_json(dest / "evidence.json", report)
+    if args.run_record:
+        record = load_json(args.run_record)
+        validation = evidence.run_record_errors(record)
+        write_json(dest / "run-record.check.json", validation)
+        report["run_record"] = validation
+        write_json(dest / "evidence.json", report)
+    else:
+        write_json(
+            dest / "run-record.template.json",
+            evidence.run_record_template(),
+        )
+    gate = gates.evidence_gate(report)
+    return {
+        "evidence": f"{dest.relative_to(ROOT)}/evidence.json",
+        "gate": gate,
+        "package_state": report["package_state"],
+        "capability": report["capability"],
+        "missing_target_evidence": report["missing_target_evidence"],
+        "best_aggregate_speedup": report["official"]["best_aggregate_speedup"],
+        "provisional_records": [
+            item["record_id"]
+            for item in report["official"]["provisional_records"]
+        ],
+    }
 
 
 def cmd_materialize(args) -> dict:
@@ -213,6 +330,14 @@ def main(argv=None) -> int:
     p.add_argument("--adaptation", required=True)
     p.add_argument("--constraint", action="append")
 
+    p = sub.add_parser("evidence")
+    p.add_argument("--task", required=True)
+    p.add_argument("--adaptation", required=True)
+    p.add_argument(
+        "--run-record",
+        help="validate an existing run record against the field discipline",
+    )
+
     args = parser.parse_args(argv)
     handler = {
         "rules": cmd_rules,
@@ -221,6 +346,7 @@ def main(argv=None) -> int:
         "check": cmd_check,
         "materialize": cmd_materialize,
         "description": cmd_description,
+        "evidence": cmd_evidence,
     }[args.command]
     try:
         result = handler(args)

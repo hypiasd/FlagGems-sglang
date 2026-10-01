@@ -6,11 +6,12 @@
 
 - `experiments/`：冻结源码、设备执行、正确性、计时、分析和报告。
 - `adaptation/`：官方契约、发布检查、独立适配、ZIP 和官方成绩账本。
+- `pr/`：第二条出口（上游仓库 PR）的规则、打包、闸门、证据纪律与 PR 描述。
 - `task60/`、`task78/`、`task103/`：本题源码、profile、adapter、开发用例及历史官方记录。
 - `archive/`：旧工作流和版本资产，入口见 [归档说明](archive/README.md)。
 - `.local/`：被 Git 忽略的连接配置、冻结快照、实验报告、profiler 原始产物及本地资产备份。
 
-上游 `src/`、`tests/`、CI 和包布局继续保留。日常实验直接编写源码，不依赖 KernelGen。旧工作流只作历史参考。
+上游 `src/`、`tests/`、CI 和包布局继续保留。日常实验直接编写源码，不调用 KernelGen 工具（其专精知识库只覆盖华为且本会话未注册）；复用的是它的证据方法论，见 [证据纪律](#证据纪律复用-kernelgen-方法论)。旧工作流只作历史参考。
 
 ## 实验
 
@@ -124,12 +125,27 @@ python -m competition.pr plan --task task103 --adaptation ADAPT_ID
 python -m competition.pr bundle --task task103 --adaptation ADAPT_ID --rename O=out_ptr
 python -m competition.pr materialize --task task103 --adaptation ADAPT_ID
 python -m competition.pr check --task task103 --adaptation ADAPT_ID
+python -m competition.pr evidence --task task103 --adaptation ADAPT_ID
 ```
 
 - `bundle` 把获奖源码重排进 `.local/pr/<task>/<adaptation>/`：加 Apache 头、补 `__all__ = ["<op>"]`、用官方同版本 isort+black 格式化、把超长注释/模块 docstring 折进 flake8 的 120 列、按 `--rename` 做 token 级改名（flake8 E741 等）。每一处非源码改动都记进 `bundle.json`，并在 PR 描述里逐条披露；原始获奖文件另存 `awarded/` 供比对。
 - `materialize` 用 `git archive upstream/master` 展开官方树并把 bundle 文件复制进去；`check` 依次跑 structure、hygiene、ast_preservation（获奖实现的 AST 除声明过的改名外必须一致）、style（black / isort / flake8）、官方 `tools/ci_checks`（竞赛 PR 不适用的检查显式标为 out of scope）和 import smoke。
 - `check` 的结论只是“本地可跑的闸门全过”，**不是**“可以合并”；未跑的闸门必须在上游 CI 上补齐。`import_smoke` 需要 torch+triton，本机通常 `unavailable`，此时会打印在设备上执行的确切命令，不得声称注册已通过。
 - 样式工具在 `competition/.local/venv-pr/`（black 24.8.0 / isort 5.12.0 / flake8 7.1.0，与 `basic-ci.yml` 同版本）；可用 `--tools` 指向其他 bin 目录。没有工具时 style 闸门报 `unavailable`，不会假装通过。
+
+### 证据纪律（复用 KernelGen 方法论）
+
+KernelGen 的 MCP 工具对本项目不可用（专精知识库只有华为，且本会话未注册），但它的证据契约可复用：`competition/pr/evidence.py` 把这套方法论落成代码，源码出处是 `competition/archive/legacy/.agents/skills/kernelgen-flagos/references/reliability-gates.md` 及其 `target-evidence.md` / `run-record.md` / `reviewer-protocol.md`。
+
+`competition.pr evidence` 逐目标写出 `evidence.json`（`check` 同时把它折成 `evidence` 闸门）。闸门语义：**记录互相矛盾 → `fail`；证据在这里根本不存在 → `unavailable`；齐备 → `pass`**。因此 `ready_for_pr` 始终只表示“本地能跑的闸门没有失败”。
+
+1. **能力三态**：`absent` / `configured_unavailable` / `callable`。配置文件、可达主机、有效 token 都只算 `configured_unavailable`；只有当前工具注册表里真的能调用才算 `callable`。本机现状：平台通道 `callable`（`browser/submit.mjs` 在且已有记录），租用设备 `configured_unavailable`（隧道配了不等于设备能用，且这里不探测可达性）。
+2. **逐目标一个证据状态**：`generated` / `tool_unavailable` / `reported_only` 无论怎么解释都不能变成 `target_validated` 或 `measured`；零覆盖、部分覆盖、未绑定契约覆盖一律 `inconclusive`，只有真实失败的用例才 `rejected`。
+3. **提升要目标证据**：`compile.success`、用例集契约的精确覆盖、每例 `input_signature`、target/compiler/runtime 身份、provenance 的 `invocation_id` 与 raw hash，缺一项就 `inconclusive`。
+4. **性能只给标签**：`reported_only` / `performance_reported_complete` / `performance_reported_subset` / `performance_reported_incomplete`；`official_score_computed` 恒为 `false`，官方聚合单独记录，不由本地解析器推断。
+5. **平台生命周期**：`prepared → submitted → record_confirmed → evaluating → completed`。`evaluating` 是临时态——逐目标值可被修订、`aggregate_speedup` 必须为空；同一提交的 interim 行与终态修订都保留，interim 标 `superseded`，既不删除也不进聚合。**这是 15.76× / 2.43× 一类误读的结构性防线。**
+6. **run record 字段纪律 + 追加不覆盖**：重试或修复必须换新 `run_id` 并用 `parent_run_id` 关联；`service_state != callable` 时不得写 `tool_name`。`evidence --run-record FILE` 校验既有记录，否则写出 null 骨架 `run-record.template.json`（骨架不编造任何值）。
+7. **两阶段独立审查**：A 盲审并保存原始输出，之后 B 由**不同** reviewer 挑刺并逐条处置 A 的结论。本地只能校验收据一致性（源码/基线哈希、两个 agent ID 不同、每条 A 发现都有 B 处置、覆盖记录必须带源引用 trace），**不能**证明审查真的发生。当前 `release.json` 的 `reviews` 为空，所以 evidence 闸门报 `unavailable`，而不是通过。
 
 ### Chrome 提交与恢复
 
