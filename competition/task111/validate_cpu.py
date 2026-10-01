@@ -98,7 +98,9 @@ def check_coverage(cpu_model, call, tensor, label, allow_rewrite=False):
     if multiple and not allow_rewrite:
         raise AssertionError(f"{label}: write coverage multiple={multiple}")
     if int(allocation.writes.sum()) - tensor.numel() != multiple:
-        raise AssertionError(f"{label}: kernel wrote outside the returned view")
+        raise AssertionError(
+            f"{label}: kernel wrote outside the returned view"
+        )
     return multiple
 
 
