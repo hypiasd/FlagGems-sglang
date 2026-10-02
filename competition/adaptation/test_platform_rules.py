@@ -163,6 +163,31 @@ class FailureLedger(unittest.TestCase):
             [],
         )
 
+    def test_a_platform_dispatch_failure_never_blocks(self) -> None:
+        """An infra failure is about the queue, not our bytes.
+
+        Observed for real: Task 111's only missing chip (intl_b) failed twice
+        with "评测任务提交失败，已停止重试" while passing at 8.25x on Task 112.
+        Recording those entries made the gate reject the package whose whole
+        point was to resubmit, so the retry -- the only possible remedy -- was
+        forbidden by the ledger.
+        """
+        failures.record(
+            "t",
+            {
+                "kind": "platform-infra",
+                "targets": ["intl_b"],
+                "members": {"generic.py": "aaa"},
+                "message": "评测任务提交失败，已停止重试",
+            },
+        )
+        self.assertEqual(
+            failures.exact_repeat(
+                "t", {"intl_b": "generic.py"}, {"generic.py": "aaa"}
+            ),
+            [],
+        )
+
     def test_other_targets_are_unaffected(self) -> None:
         failures.record(
             "t",

@@ -15,7 +15,9 @@ Layout, one JSON object per line at ``competition/<task>/platform-failures.jsonl
 
 ``kind`` is free text but the useful values are ``code-safety`` (static
 rejection, retryable by editing), ``compile`` (a target's compiler refused the
-kernel) and ``runtime``.  ``targets`` may be a list; ``"*"`` means every target.
+kernel), ``runtime`` and ``platform-infra``.  The last one means the platform
+failed to dispatch the evaluation job at all; it says nothing about our bytes,
+so it is recorded for the timeline but never blocks a resubmission.  ``targets`` may be a list; ``"*"`` means every target.
 """
 
 from __future__ import annotations
@@ -76,11 +78,20 @@ def exact_repeat(
     *still routed* to the same bytes -- which is what makes a dedicated file
     unblock a target, and what stops a resubmission that changes nothing.  A
     target that now routes elsewhere is free to be retried.
+
+    ``platform-infra`` records never block.  "评测任务提交失败, 已停止重试" says
+    the platform could not dispatch the evaluation job; it is a statement about
+    the queue, not about our bytes, and the only remedy is to submit again.
+    Blocking there would make the ledger forbid the single action that can fix
+    the problem -- observed for real: recording Task 111's two intl_b dispatch
+    failures made the gate reject the very package it was meant to release.
     """
     if not routing or not hashes:
         return []
     blocked = []
     for entry in load(task):
+        if entry.get("kind") == "platform-infra":
+            continue
         recorded = entry.get("members") or {}
         if not recorded:
             continue
