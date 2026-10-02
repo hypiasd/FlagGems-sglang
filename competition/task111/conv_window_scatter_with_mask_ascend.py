@@ -1,38 +1,43 @@
-"""Ascend-dedicated Task 111 ``conv_window_scatter_with_mask``.
+"""Ascend-dedicated Task 111 ``conv_window_scatter_with_mask``: block-load lookup.
 
-Why this file exists
---------------------
-The generic member is correct on this target but slow: the official table read
-back on 2026-10-02 07:51 (+08:00) gives 华为 **0.17x** on the same bytes
-that score 5.14x / 0.56x / 6.16x / 7.37x on other targets (submission
-``task111-2026-10-02T07:41:56+08:00-53db409aa45f``).  A 5-30x gap between
-targets on identical source is a backend artefact, not an algorithmic one, so
-this file changes exactly one construct.
+What was already falsified here
+-------------------------------
+Submission ``task111-2026-10-02T07:53:27+08:00-44861609ca55`` routed this target
+to a member whose only change was ``range(REQUESTS)`` -> ``tl.static_range``
+(semantics-preserving frontend unrolling of the request scan).  The official
+table then reported **0.17x for this target, identical to the generic
+member's 0.17x**, so the scan loop is not what costs this backend time.
 
-The single change
------------------
-``range(REQUESTS)`` becomes ``tl.static_range(REQUESTS)``.  Both bounds are the
-same ``tl.constexpr`` launch parameter, and ``static_range`` only decides
-*when* the iterations are laid out: the frontend emits the body once per
-iteration as straight-line code instead of an ``scf.for``.  The arithmetic, the
-memory operations, the masks and the "last valid request wins" resolution are
-untouched, so **this change cannot alter a single output element** -- it is
-safe to make on a target that already passes.
+The next mechanism, and why it is a different one
+-------------------------------------------------
+The scan issues ``2 * REQUESTS`` **scalar** global loads with a loop-carried
+``tl.where`` chain; unrolling them changed nothing, which points at the loads
+themselves rather than the loop.  This file instead loads the whole request
+table as one block and reduces it:
 
-Why it is the right first lever: the scan issues ``2 * REQUESTS`` scalar loads
-of ``dst_indices_raw``/``step_indices_raw`` with a loop-carried ``tl.where``
-chain.  On a backend that hides global-memory latency with wide vector accesses
-rather than with many concurrent warps, that dependent scalar chain is the
-dominant cost, and unrolling it exposes the loads to the scheduler.
+    req      = tl.arange(0, REQ_BLOCK)
+    targets  = tl.load(dst_idx_ptr + req, mask=req_mask, other=-1)
+    valid    = (targets == slot) & (candidates >= 0)
+    source   = tl.max(tl.where(valid, req, -1), axis=0)      # highest valid request
+    step     = tl.max(tl.where(req == source, candidates, -1), axis=0)
+
+That is two vector loads and two reductions instead of 2*REQUESTS dependent
+scalar loads, and "last valid request wins" is preserved: ``req`` is ascending,
+so the maximum index among the valid lanes is exactly the last writer, and the
+second maximum extracts its ``step`` without a gather.  If nothing matched,
+``source`` is -1, ``hit`` is false, and the unused ``step`` never reaches memory.
+
+Correctness evidence: ``validate_cpu.py`` passes 10/10 development cases
+(2894 model programs) -- the same harness every shipped member must pass.  This
+is the same lookup the Kunlunxin experiment compiled with (its XPU failure was a
+wrong *result*, which is exactly why this is being tried on backends whose
+``tl.max`` is not in question).
 
 Falsifier
 ---------
-If this target reports the same speed as the generic member, the scan loop is
-not the bottleneck here and the next candidate is the block-reduction lookup
-(one vector load of the request table plus ``tl.max`` over the request axis),
-which removes the scalar chain entirely.  Because the change is
-semantics-preserving, a correctness failure here would contradict the
-equivalence claim and not a tuning choice.
+If this target again reports 0.17x, then neither the scan loop nor the scalar
+load chain is the bottleneck, and the remaining suspects are device-side: the
+grid shape (one program per (layer, slot, row-chunk)) and the ``num_warps``.
 """
 
 from __future__ import annotations
@@ -72,6 +77,7 @@ def _conv_window_scatter_kernel(
     N_CHUNK: tl.constexpr,
     ROW_BLOCK: tl.constexpr,
     REQUESTS: tl.constexpr,
+    REQ_BLOCK: tl.constexpr,
 ):
     position = tl.program_id(0)
     layer = position // (CACHE * N_CHUNK)
@@ -79,16 +85,20 @@ def _conv_window_scatter_kernel(
     slot = rest // N_CHUNK
     chunk = rest % N_CHUNK
 
-    # Reverse mapping, resolved in-kernel: the highest-index valid request that
-    # targets this slot.  ``REQUESTS`` is the request count, not a block size.
-    source = -1
-    step = 0
-    for i in tl.static_range(REQUESTS):
-        target = tl.load(dst_idx_ptr + i)
-        candidate = tl.load(step_idx_ptr + i)
-        match = (target == slot) & (candidate >= 0)
-        source = tl.where(match, i, source)
-        step = tl.where(match, candidate, step)
+    # Reverse mapping, resolved in-kernel as one block load plus a reduction:
+    # the highest-index valid request targeted at this slot.  ``REQ_BLOCK`` is
+    # the next power of two of the request count, NOT the count itself.
+    req = tl.arange(0, REQ_BLOCK)
+    req_mask = req < REQUESTS
+    targets = tl.load(dst_idx_ptr + req, mask=req_mask, other=-1)
+    candidates = tl.load(step_idx_ptr + req, mask=req_mask, other=-1)
+    valid = (targets == slot) & (candidates >= 0)
+    source = tl.max(tl.where(valid, req, -1), axis=0)
+    # Exactly one lane has ``req == source`` and its candidate is >= 0, so a
+    # second maximum with -1 as the neutral element extracts ``step`` with no
+    # gather.  If nothing matched, ``source`` is -1 and ``hit`` is false, so the
+    # unused ``step`` never reaches memory.
+    step = tl.max(tl.where(req == source, candidates, -1), axis=0)
     hit = source >= 0
 
     row = chunk * ROW_BLOCK + tl.arange(0, ROW_BLOCK)
@@ -139,6 +149,7 @@ def conv_window_scatter_with_mask(dst, src, dst_indices_raw, step_indices_raw):
     requests = dst_indices_raw.shape[0]
     row_length = dim * window
     row_block = min(triton.next_power_of_2(max(row_length, 1)), _ROW_CAP)
+    req_block = triton.next_power_of_2(max(requests, 1))
     chunks = triton.cdiv(row_length, row_block)
     out = torch.empty_like(dst)
 
@@ -167,5 +178,6 @@ def conv_window_scatter_with_mask(dst, src, dst_indices_raw, step_indices_raw):
         chunks,
         row_block,
         requests,
+        req_block,
     )
     return out
