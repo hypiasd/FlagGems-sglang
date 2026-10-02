@@ -248,6 +248,44 @@ class CandidateTest(unittest.TestCase):
         )
         self.assertIn("tl.program_id", CANDIDATE)
 
+    def test_index_loads_are_cast_for_int64_callers(self) -> None:
+        """Pin the int64 index fix.
+
+        Triton 3.6 refuses a loop-carried variable whose type changes between
+        iterations, so an int64 index tensor (PyTorch's default for index
+        tensors) failed to compile with "Loop-carried variable step has initial
+        type int32 but is re-assigned to int64".  The development adapter builds
+        int32, so no case in this suite caught it -- a device probe did.  Both
+        index loads must therefore enter the loop already cast.
+        """
+        kernel = top_level_functions(CANDIDATE)["_conv_window_scatter_kernel"]
+        loads = [
+            node
+            for node in ast.walk(kernel)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "load"
+        ]
+        index_loads = [
+            node
+            for node in loads
+            if any(
+                isinstance(name, ast.Name)
+                and name.id in {"dst_idx_ptr", "step_idx_ptr"}
+                for arg in node.args
+                for name in ast.walk(arg)
+            )
+        ]
+        self.assertEqual(len(index_loads), 2)
+        for node in index_loads:
+            inner = node.args[0]
+            self.assertIsInstance(
+                inner, ast.BinOp, "index load should address the table by offset"
+            )
+            # the load itself is wrapped in `.to(tl.int32)`, i.e. it appears as the
+            # receiver of an attribute call rather than as a bare expression
+        self.assertEqual(CANDIDATE.count(".to(tl.int32)"), 2)
+
     def test_kernel_reads_the_request_table_in_kernel(self) -> None:
         """The reverse mapping must happen inside the kernel, not in torch."""
         self.assertIn("for i in range(REQUESTS)", CANDIDATE)
