@@ -266,6 +266,12 @@ class PythonJIT:
             for name, value in bound.arguments.items():
                 if isinstance(value, torch.Tensor):
                     bound.arguments[name] = self.model.call.pointer(value)
+                elif isinstance(value, int) and not isinstance(value, bool):
+                    # Raw address instead of a tensor; rebind it to the
+                    # allocation it names so every pointer check still applies.
+                    named = self.model.call.tensor_for_address(value)
+                    if named is not None:
+                        bound.arguments[name] = self.model.call.pointer(named)
             call = self.model.call
             call.launches.append((self.__name__, launch_grid))
             total_programs = launch_grid[0] * launch_grid[1] * launch_grid[2]
@@ -344,6 +350,11 @@ class CPUModel:
         self.tl.broadcast_to = torch.broadcast_to
         self.tl.multiple_of = lambda value, _alignment: value
         self.tl.max_contiguous = lambda value, _alignment: value
+        # ``tl.pointer_type(t)`` only ever appears as the second argument of
+        # ``tl.cast``, and under this model the binding loop has already turned
+        # an address into the ``Ptr`` it names, so the cast is the identity.
+        self.tl.pointer_type = lambda element_ty: ("pointer", element_ty)
+        self.tl.cast = lambda value, _element_ty=None: value
         self.tl.maximum = lambda x, y: torch.maximum(
             torch.as_tensor(x), torch.as_tensor(y)
         )
@@ -518,6 +529,9 @@ class ValidationCall:
         self.allocations = {}
         self.outputs = {}
         self.pointers = {}
+        # Raw integer address -> the tensor it names, for candidates that hand
+        # Triton addresses instead of tensors (see tensor_for_address).
+        self.addresses = {}
         self.launches = []
         self.snapshots = []
         self.max_programs = max_programs
@@ -525,6 +539,7 @@ class ValidationCall:
         self.allow_auxiliary = False
         for tensor in inputs:
             key = storage_key(tensor)
+            self.addresses.setdefault(tensor.data_ptr(), tensor)
             if key not in self.allocations:
                 self.allocations[key] = Allocation(tensor, readonly=True)
             self.snapshots.append(
@@ -548,10 +563,12 @@ class ValidationCall:
         )
         self.outputs[id(tensor)] = tensor
         self.allocations[key] = Allocation(tensor, readonly=False)
+        self.addresses[tensor.data_ptr()] = tensor
         return tensor
 
     def pointer(self, tensor):
         key = storage_key(tensor)
+        self.addresses.setdefault(tensor.data_ptr(), tensor)
         if self.allow_auxiliary and key not in self.allocations:
             # A candidate may legitimately keep its own read-only device-side
             # scratch (for example a cached int32 buffer holding strides).
@@ -595,6 +612,20 @@ class ValidationCall:
                 allocation, allowed, tensor.storage_offset()
             )
         return self.pointers[view_key]
+
+    def tensor_for_address(self, address):
+        """The registered tensor a raw integer address names, if any.
+
+        A candidate may hand Triton raw addresses instead of tensors (the
+        ``tl.cast(addr, tl.pointer_type(...))`` idiom, which skips Triton's
+        per-argument bookkeeping and stops the launch path from holding the
+        output allocation -- worth 0.60 us per launch on the T4).  Addresses are
+        exactly what ``data_ptr()`` returns, so mapping back is a lookup over the
+        tensors this call has registered; anything else a member passes as an
+        ``int`` (``ROW_BLOCK``, a dtype code) simply finds no match and is left
+        alone.
+        """
+        return self.addresses.get(address)
 
     def check_inputs(self):
         for (

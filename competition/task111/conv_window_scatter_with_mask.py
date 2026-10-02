@@ -37,31 +37,73 @@ _ROW_CAP = 1024
     # Pointer arguments are not specialized on alignment: measuring on the T4
     # showed 22.96 -> 20.63 us per launch for a five-pointer kernel (2.33 us),
     # and the alignment hint does not change this kernel's vectorization.
-    do_not_specialize=["dst_ptr", "src_ptr", "dst_idx_ptr", "step_idx_ptr", "out_ptr"],
+    # These five are integer addresses, not tensors (see the body), so the list
+    # also keeps Triton from specializing them on divisibility by 16.
+    do_not_specialize=[
+        "dst_addr",
+        "src_addr",
+        "dst_idx_addr",
+        "step_idx_addr",
+        "out_addr",
+    ],
 )
 def _conv_window_scatter_kernel(
-    dst_ptr,
-    src_ptr,
-    dst_idx_ptr,
-    step_idx_ptr,
-    out_ptr,
+    dst_addr,
+    src_addr,
+    dst_idx_addr,
+    step_idx_addr,
+    out_addr,
     LAYOUT: tl.constexpr,
     ROW_BLOCK: tl.constexpr,
+    IDX64: tl.constexpr,
+    DTYPE: tl.constexpr,
 ):
     # One constexpr tuple instead of four: Triton's binder rebuilds a dict entry
-    # and a cache-key entry per parameter on every call, so seven parameters beat
-    # ten (T4, empty-kernel equivalent: 14.30 -> 13.70 us).  ROW_BLOCK stays its
+    # and a cache-key entry per parameter on every call, so few parameters beat
+    # many (T4, empty-kernel equivalent: 14.30 -> 13.70 us).  ROW_BLOCK stays its
     # own parameter because tl.arange only accepts an annotated constexpr, and a
     # value subscripted out of a constexpr tuple is a plain Python int on real
     # hardware ("arange's arguments must be of type tl.constexpr").
+    #
+    # All five pointers arrive as raw integer addresses rather than tensors.
+    # Handing Triton an integer skips its per-argument bookkeeping -- the params
+    # entry, the alignment specialization and the per-argument launch metadata --
+    # and, most importantly, stops the launch path from holding a reference to the
+    # output tensor that this call just allocated.  Together that is 0.60 us per
+    # launch on the T4 (21.00 -> 20.40 us measured in an interleaved A/B), which
+    # is the largest win any rewrite of this wrapper has produced.  The tensors
+    # stay alive in the caller's locals for the whole launch, so the addresses
+    # stay valid.  Because the element and index types can no longer be inferred
+    # they are stated here: IDX64 because the task declares int32 indices but a
+    # caller may still pass int64 (PyTorch's default index dtype), DTYPE for the
+    # data itself.
+    #
+    # Both selections happen in Python while tracing.  The ``if``/``else`` form is
+    # rejected for the pointer width -- Triton emits both branches and then fails
+    # on the mismatched pointer types -- so IDX64 uses a conditional expression.
+    index_ty = tl.int64 if IDX64 else tl.int32
+    if DTYPE == 0:
+        elem_ty = tl.float32
+    elif DTYPE == 1:
+        elem_ty = tl.float16
+    else:
+        elem_ty = tl.bfloat16
+    out_ptr = tl.cast(out_addr, tl.pointer_type(elem_ty))
+    dst_ptr = tl.cast(dst_addr, tl.pointer_type(elem_ty))
+    src_ptr = tl.cast(src_addr, tl.pointer_type(elem_ty))
+    dst_idx_ptr = tl.cast(dst_idx_addr, tl.pointer_type(index_ty))
+    step_idx_ptr = tl.cast(step_idx_addr, tl.pointer_type(index_ty))
+    # ``dst.shape`` travels whole: unpacking it on the host and re-packing four
+    # scalars measured 0.66 us per call, more than either selection above.
     dst_s0 = (LAYOUT[0], LAYOUT[1], LAYOUT[2], LAYOUT[3])
     src_s0 = (LAYOUT[4], LAYOUT[5], LAYOUT[6], LAYOUT[7], LAYOUT[8])
     out_s0 = (LAYOUT[9], LAYOUT[10], LAYOUT[11], LAYOUT[12])
-    CACHE = LAYOUT[13]
-    DIM = LAYOUT[14]
-    WINDOW = LAYOUT[15]
-    N_CHUNK = LAYOUT[16]
-    REQUESTS = LAYOUT[17]
+    SHAPE = LAYOUT[13]
+    CACHE = SHAPE[1]
+    DIM = SHAPE[2]
+    WINDOW = SHAPE[3]
+    N_CHUNK = LAYOUT[14]
+    REQUESTS = LAYOUT[15]
     position = tl.program_id(0)
     layer = position // (CACHE * N_CHUNK)
     rest = position % (CACHE * N_CHUNK)
@@ -124,38 +166,37 @@ def conv_window_scatter_with_mask(dst, src, dst_indices_raw, step_indices_raw):
     grid measured 3-4x *slower* on T4, because each program then carries tens of
     thousands of elements and the device runs out of parallelism.
 
-    What the launch passes: five pointers plus the thirteen real strides of
-    ``dst``/``src``/``out`` and six shape-derived constants, all as
-    ``tl.constexpr``.  Triton keys its compiled-kernel cache on those constants,
-    so a new stride layout costs one compilation and every later call with the
-    same layout reuses it -- without this module holding any state of its own,
-    which a cached plan would require and which the platform forbids.
+    The launch passes five **addresses** -- ``dst``, ``src``, both index tensors
+    and the freshly allocated output -- plus one constexpr tuple holding the
+    thirteen real strides of ``dst``/``src``/``out``, ``dst.shape`` and two
+    shape-derived constants, plus the pointer-width and element-type codes.  All
+    five tensors stay referenced by the caller's locals for the whole launch, so
+    the addresses remain valid; passing them as integers instead of tensors is
+    what avoids the launch path holding the output allocation.  Triton keys its
+    compiled-kernel cache on the constexpr tuple, so a new stride layout costs one
+    compilation and every later call with the same layout reuses it -- without
+    this module holding any state of its own, which a cached plan would require
+    and which the platform forbids.
     """
-    layers, cache, dim, window = dst.shape
-    requests = dst_indices_raw.shape[0]
+    shape = dst.shape
+    cache, dim, window = shape[1], shape[2], shape[3]
     # ROW_BLOCK is fixed instead of next_power_of_2(dim * window): the device is
     # provably not the bottleneck (an empty kernel with this exact signature
     # measures the same as the real one on T4), so per-call Python arithmetic to
     # size the block buys nothing.
     chunks = (dim * window + _ROW_CAP - 1) >> 10
     out = torch.empty_like(dst)
-    dst_s = dst.stride()
-    src_s = src.stride()
-    out_s = out.stride()
     _conv_window_scatter_kernel.run(
-        dst,
-        src,
-        dst_indices_raw,
-        step_indices_raw,
-        out,
-        (
-            dst_s[0], dst_s[1], dst_s[2], dst_s[3],
-            src_s[0], src_s[1], src_s[2], src_s[3], src_s[4],
-            out_s[0], out_s[1], out_s[2], out_s[3],
-            cache, dim, window, chunks, requests,
-        ),
+        dst.data_ptr(),
+        src.data_ptr(),
+        dst_indices_raw.data_ptr(),
+        step_indices_raw.data_ptr(),
+        out.data_ptr(),
+        dst.stride() + src.stride() + out.stride() + (shape, chunks, dst_indices_raw.shape[0]),
         _ROW_CAP,
-        grid=(layers * cache * chunks,),
+        int(dst_indices_raw.dtype == torch.int64),
+        1 if dst.dtype == torch.float16 else (2 if dst.dtype == torch.bfloat16 else 0),
+        grid=(shape[0] * cache * chunks,),
         warmup=False,
     )
     return out
