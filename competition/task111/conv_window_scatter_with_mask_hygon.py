@@ -33,35 +33,33 @@ __all__ = ["conv_window_scatter_with_mask"]
 _ROW_CAP = 1024
 
 
-@triton.jit(
-    # Pointer arguments are not specialized on alignment: measuring on the T4
-    # showed 22.96 -> 20.63 us per launch for a five-pointer kernel (2.33 us),
-    # and the alignment hint does not change this kernel's vectorization.
-    do_not_specialize=["dst_ptr", "src_ptr", "dst_idx_ptr", "step_idx_ptr", "out_ptr"],
-)
+@triton.jit
 def _conv_window_scatter_kernel(
     dst_ptr,
     src_ptr,
     dst_idx_ptr,
     step_idx_ptr,
     out_ptr,
-    LAYOUT: tl.constexpr,
+    dst_s0: tl.constexpr,
+    dst_s1: tl.constexpr,
+    dst_s2: tl.constexpr,
+    dst_s3: tl.constexpr,
+    src_s0: tl.constexpr,
+    src_s1: tl.constexpr,
+    src_s2: tl.constexpr,
+    src_s3: tl.constexpr,
+    src_s4: tl.constexpr,
+    out_s0: tl.constexpr,
+    out_s1: tl.constexpr,
+    out_s2: tl.constexpr,
+    out_s3: tl.constexpr,
+    CACHE: tl.constexpr,
+    DIM: tl.constexpr,
+    WINDOW: tl.constexpr,
+    N_CHUNK: tl.constexpr,
     ROW_BLOCK: tl.constexpr,
+    REQUESTS: tl.constexpr,
 ):
-    # One constexpr tuple instead of four: Triton's binder rebuilds a dict entry
-    # and a cache-key entry per parameter on every call, so seven parameters beat
-    # ten (T4, empty-kernel equivalent: 14.30 -> 13.70 us).  ROW_BLOCK stays its
-    # own parameter because tl.arange only accepts an annotated constexpr, and a
-    # value subscripted out of a constexpr tuple is a plain Python int on real
-    # hardware ("arange's arguments must be of type tl.constexpr").
-    dst_s0 = (LAYOUT[0], LAYOUT[1], LAYOUT[2], LAYOUT[3])
-    src_s0 = (LAYOUT[4], LAYOUT[5], LAYOUT[6], LAYOUT[7], LAYOUT[8])
-    out_s0 = (LAYOUT[9], LAYOUT[10], LAYOUT[11], LAYOUT[12])
-    CACHE = LAYOUT[13]
-    DIM = LAYOUT[14]
-    WINDOW = LAYOUT[15]
-    N_CHUNK = LAYOUT[16]
-    REQUESTS = LAYOUT[17]
     position = tl.program_id(0)
     layer = position // (CACHE * N_CHUNK)
     rest = position % (CACHE * N_CHUNK)
@@ -73,15 +71,8 @@ def _conv_window_scatter_kernel(
     source = -1
     step = 0
     for i in range(REQUESTS):
-        # Both index tensors are cast to int32 before they enter the loop-carried
-        # selects.  Triton 3.6 rejects a loop-carried variable whose type changes
-        # between iterations ("Loop-carried variable step has initial type int32
-        # but is re-assigned to int64"), so an int64 index tensor -- PyTorch's
-        # default for index tensors -- compiled fine on the development harness
-        # (which builds int32) and then failed on any caller that passed int64.
-        # Slot and step indices are bounded by the cache depth, so int32 is exact.
-        target = tl.load(dst_idx_ptr + i).to(tl.int32)
-        candidate = tl.load(step_idx_ptr + i).to(tl.int32)
+        target = tl.load(dst_idx_ptr + i)
+        candidate = tl.load(step_idx_ptr + i)
         match = (target == slot) & (candidate >= 0)
         source = tl.where(match, i, source)
         step = tl.where(match, candidate, step)
@@ -93,7 +84,7 @@ def _conv_window_scatter_kernel(
     window_index = row % WINDOW
 
     dst_offset = (
-        layer * dst_s0[0] + slot * dst_s0[1] + dim_index * dst_s0[2] + window_index * dst_s0[3]
+        layer * dst_s0 + slot * dst_s1 + dim_index * dst_s2 + window_index * dst_s3
     )
     # Slots that resolve to a request overwrite their destination value, so
     # reading it first would be a dead load.  Dropping it removes the
@@ -101,17 +92,17 @@ def _conv_window_scatter_kernel(
     value = tl.load(dst_ptr + dst_offset, mask=in_row & (~hit), other=0.0)
 
     src_offset = (
-        layer * src_s0[0]
-        + source * src_s0[1]
-        + step * src_s0[2]
-        + dim_index * src_s0[3]
-        + window_index * src_s0[4]
+        layer * src_s0
+        + source * src_s1
+        + step * src_s2
+        + dim_index * src_s3
+        + window_index * src_s4
     )
     gathered = tl.load(src_ptr + src_offset, mask=in_row & hit, other=0.0)
     value = tl.where(hit, gathered, value)
 
     out_offset = (
-        layer * out_s0[0] + slot * out_s0[1] + dim_index * out_s0[2] + window_index * out_s0[3]
+        layer * out_s0 + slot * out_s1 + dim_index * out_s2 + window_index * out_s3
     )
     tl.store(out_ptr + out_offset, value, mask=in_row)
 
@@ -133,29 +124,35 @@ def conv_window_scatter_with_mask(dst, src, dst_indices_raw, step_indices_raw):
     """
     layers, cache, dim, window = dst.shape
     requests = dst_indices_raw.shape[0]
-    # ROW_BLOCK is fixed instead of next_power_of_2(dim * window): the device is
-    # provably not the bottleneck (an empty kernel with this exact signature
-    # measures the same as the real one on T4), so per-call Python arithmetic to
-    # size the block buys nothing.
-    chunks = (dim * window + _ROW_CAP - 1) >> 10
+    row_length = dim * window
+    row_block = min(triton.next_power_of_2(max(row_length, 1)), _ROW_CAP)
+    chunks = triton.cdiv(row_length, row_block)
     out = torch.empty_like(dst)
-    dst_s = dst.stride()
-    src_s = src.stride()
-    out_s = out.stride()
-    _conv_window_scatter_kernel.run(
+
+    _conv_window_scatter_kernel[(layers * cache * chunks,)](
         dst,
         src,
         dst_indices_raw,
         step_indices_raw,
         out,
-        (
-            dst_s[0], dst_s[1], dst_s[2], dst_s[3],
-            src_s[0], src_s[1], src_s[2], src_s[3], src_s[4],
-            out_s[0], out_s[1], out_s[2], out_s[3],
-            cache, dim, window, chunks, requests,
-        ),
-        _ROW_CAP,
-        grid=(layers * cache * chunks,),
-        warmup=False,
+        dst.stride(0),
+        dst.stride(1),
+        dst.stride(2),
+        dst.stride(3),
+        src.stride(0),
+        src.stride(1),
+        src.stride(2),
+        src.stride(3),
+        src.stride(4),
+        out.stride(0),
+        out.stride(1),
+        out.stride(2),
+        out.stride(3),
+        cache,
+        dim,
+        window,
+        chunks,
+        row_block,
+        requests,
     )
     return out

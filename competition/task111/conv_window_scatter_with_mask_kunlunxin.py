@@ -49,7 +49,6 @@ import triton.language as tl
 
 __all__ = ["conv_window_scatter_with_mask"]
 
-_ROW_CAP = 1024
 _COPY_BLOCK = 8192
 
 
@@ -122,32 +121,32 @@ def _scatter_kernel(
     out_s3: tl.constexpr,
     DIM: tl.constexpr,
     WINDOW: tl.constexpr,
-    N_CHUNK: tl.constexpr,
-    REQUESTS: tl.constexpr,
-    ROW_BLOCK: tl.constexpr,
+    DIM_BLOCK: tl.constexpr,
+    WINDOW_BLOCK: tl.constexpr,
 ):
     """Write one request's window into the slot that request names.
 
-    The program id encodes (layer, request, chunk), so the reverse lookup the
-    generic member performs in-kernel becomes two scalar loads here: the request
-    table is *indexed* by the request index rather than searched for the slot.
-    Nothing is reduced and nothing is looped over.
+    The grid is two-dimensional -- ``program_id(0)`` is the request and
+    ``program_id(1)`` is the layer -- and the window is a two-dimensional block,
+    so this body contains no integer division or modulo at all.  That is
+    deliberate: on this backend a dense copy kernel carrying no ``//``/``%`` runs
+    correctly while the version that decomposed a flat row index with
+    ``row // WINDOW`` (a non-power-of-two divisor) did not, and the unroll-control
+    pass that this target depends on is known to be sensitive to exactly these
+    constructs.  The slot and step come back as one-element blocks rather than
+    0-d scalars so that every value here is a block value.
     """
-    position = tl.program_id(0)
-    layer = position // (REQUESTS * N_CHUNK)
-    rest = position % (REQUESTS * N_CHUNK)
-    request = rest // N_CHUNK
-    chunk = rest % N_CHUNK
-
-    slot = tl.load(dst_idx_ptr + request).to(tl.int32)
-    step = tl.load(step_idx_ptr + request).to(tl.int32)
+    request = tl.program_id(0)
+    layer = tl.program_id(1)
+    one = tl.arange(0, 1)
+    slot = tl.load(dst_idx_ptr + request + one).to(tl.int32)
+    step = tl.load(step_idx_ptr + request + one).to(tl.int32)
     # An invalid request is masked out, never branched on.
     valid = step >= 0
 
-    row = chunk * ROW_BLOCK + tl.arange(0, ROW_BLOCK)
-    in_row = row < DIM * WINDOW
-    dim_index = row // WINDOW
-    window_index = row % WINDOW
+    dim_index = tl.arange(0, DIM_BLOCK)[:, None]
+    window_index = tl.arange(0, WINDOW_BLOCK)[None, :]
+    mask = (dim_index < DIM) & (window_index < WINDOW) & valid
 
     src_offset = (
         layer * src_s0
@@ -156,7 +155,7 @@ def _scatter_kernel(
         + dim_index * src_s3
         + window_index * src_s4
     )
-    gathered = tl.load(src_ptr + src_offset, mask=in_row & valid, other=0.0)
+    gathered = tl.load(src_ptr + src_offset, mask=mask, other=0.0)
 
     out_offset = (
         layer * out_s0
@@ -164,14 +163,13 @@ def _scatter_kernel(
         + dim_index * out_s2
         + window_index * out_s3
     )
-    tl.store(out_ptr + out_offset, gathered, mask=in_row & valid)
+    tl.store(out_ptr + out_offset, gathered, mask=mask)
 
 
 def conv_window_scatter_with_mask(dst, src, dst_indices_raw, step_indices_raw):
     """Copy the destination, then scatter every valid request into it."""
     layers, cache, dim, window = dst.shape
     requests = dst_indices_raw.shape[0]
-    chunks = (dim * window + _ROW_CAP - 1) >> 10
     out = torch.empty_like(dst)
 
     total = out.numel()
@@ -191,7 +189,7 @@ def conv_window_scatter_with_mask(dst, src, dst_indices_raw, step_indices_raw):
     )
 
     if requests:
-        _scatter_kernel[(layers * requests * chunks,)](
+        _scatter_kernel[(requests, layers)](
             src,
             dst_indices_raw,
             step_indices_raw,
@@ -207,8 +205,7 @@ def conv_window_scatter_with_mask(dst, src, dst_indices_raw, step_indices_raw):
             out.stride(3),
             dim,
             window,
-            chunks,
-            requests,
-            _ROW_CAP,
+            triton.next_power_of_2(dim),
+            triton.next_power_of_2(window),
         )
     return out

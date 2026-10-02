@@ -342,11 +342,16 @@ class ChipRoutingTest(unittest.TestCase):
         self.assertEqual(resolved["metax"], "conv_window_scatter_with_mask_metax.py")
 
     def test_the_conservative_members_avoid_the_unverified_launch(self) -> None:
+        # These two carry the byte-identical version with the most official
+        # observations (six submissions: Iluvatar 4.55-5.14x, Hygon 6.15-6.31x).
+        # The R4/R10 launch forms measured faster on the device we can reach but
+        # did not move either official number, so this stays where the evidence is.
         for name in ("iluvatar", "hygon"):
             text = (TASK / f"conv_window_scatter_with_mask_{name}.py").read_text()
             self.assertNotIn("data_ptr()", text, name)
             self.assertNotIn("tl.cast", text, name)
-            self.assertIn("_conv_window_scatter_kernel.run(", text, name)
+            self.assertNotIn("is_contiguous", text, name)
+            self.assertIn("_conv_window_scatter_kernel[", text, name)
 
     def test_the_conservative_members_carry_no_fallback(self) -> None:
         for name in ("iluvatar", "hygon"):
