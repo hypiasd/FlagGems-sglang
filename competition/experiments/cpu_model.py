@@ -356,7 +356,14 @@ class CPUModel:
         self.tl.load = self.load
         self.tl.store = self.store
 
-    def jit(self, function=None):
+    def jit(self, function=None, **_options):
+        """Accept the kernel-launch decorator options real Triton takes.
+
+        ``do_not_specialize`` / ``do_not_specialize_on_alignment`` only change how
+        the launcher specializes pointer alignment, which is a device-launch
+        concern; the serial CPU model must still accept the decorator so a
+        candidate using them can be validated for indexing and coverage.
+        """
         return (
             (lambda fn: PythonJIT(fn, self))
             if function is None
