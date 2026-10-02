@@ -142,6 +142,16 @@ def inputs(case, device, seed):
     )
 
     dst = torch.randn(layers, cache, dim, window, generator=gen).to(dtype)
+    if case.get("strided_dst"):
+        # A destination that is not dense.  The member may only derive its
+        # dst/out strides from the shape when ``dst`` is contiguous, so this case
+        # is what keeps the explicit-stride path exercised; without it every
+        # development case has a dense ``dst`` and the fallback never runs.
+        backing = torch.randn(
+            layers, cache, dim, window * 2, generator=gen
+        ).to(dtype)
+        dst = backing[..., ::2]
+        assert not dst.is_contiguous()
     # Unique slots: duplicate writers make the official reference arbitrary
     # (see the module docstring), so a scored case cannot contain them.
     assert requests <= cache, "case needs at least as many slots as requests"
@@ -160,6 +170,13 @@ def inputs(case, device, seed):
         step_indices_raw[0] = 0
         if requests > 1:
             step_indices_raw[1] = draft - 1
+    if case.get("int64_indices"):
+        # PyTorch's default index dtype.  The task declares int32, but a caller
+        # may still hand us int64, and the member selects its pointer width from
+        # the tensor dtype -- so this has to be an *input*, exactly as a real
+        # caller would pass it.
+        dst_indices_raw = dst_indices_raw.to(torch.int64)
+        step_indices_raw = step_indices_raw.to(torch.int64)
     return (
         dst.to(device),
         src.to(device),
