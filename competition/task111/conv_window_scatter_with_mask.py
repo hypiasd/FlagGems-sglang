@@ -75,8 +75,15 @@ def _conv_window_scatter_kernel(
     source = -1
     step = 0
     for i in range(REQUESTS):
-        target = tl.load(dst_idx_ptr + i)
-        candidate = tl.load(step_idx_ptr + i)
+        # Both index tensors are cast to int32 before they enter the loop-carried
+        # selects.  Triton 3.6 rejects a loop-carried variable whose type changes
+        # between iterations ("Loop-carried variable step has initial type int32
+        # but is re-assigned to int64"), so an int64 index tensor -- PyTorch's
+        # default for index tensors -- compiled fine on the development harness
+        # (which builds int32) and then failed on any caller that passed int64.
+        # Slot and step indices are bounded by the cache depth, so int32 is exact.
+        target = tl.load(dst_idx_ptr + i).to(tl.int32)
+        candidate = tl.load(step_idx_ptr + i).to(tl.int32)
         match = (target == slot) & (candidate >= 0)
         source = tl.where(match, i, source)
         step = tl.where(match, candidate, step)
