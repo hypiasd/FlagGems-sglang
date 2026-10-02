@@ -223,6 +223,14 @@ class PythonJIT:
         self.autotune_defaults = {}
         functools.update_wrapper(self, function)
 
+    def run(self, *args, grid, warmup=False, **kwargs):
+        """Mirror ``JITFunction.run`` so a candidate may launch through the public
+        method (``kernel.run(*args, grid=..., warmup=False)``) instead of
+        ``kernel[grid](...)``.  Real Triton implements ``__getitem__`` in terms of
+        exactly this call, so the two forms are the same launch.
+        """
+        return self[grid](*args, **kwargs)
+
     def __getitem__(self, grid):
         def launch(*args, **kwargs):
             require(
