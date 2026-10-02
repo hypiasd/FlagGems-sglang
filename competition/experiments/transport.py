@@ -68,6 +68,12 @@ def connection(device):
             "-o",
             "ControlPath=" + str(control / "connection-%C"),
         ]
+    # The device config may pin its own SSH policy (for example a checkout-local
+    # known_hosts file when the remote instance is rebuilt and its host keys
+    # change).  Appending them last lets them override the defaults above -- which
+    # they must, because a config that declares `ssh_options` and is then ignored
+    # is how a rebuilt host looks like an unreachable one.
+    options += [str(item) for item in config.get("ssh_options") or []]
     if auth.get("method") == "password":
         password = os.environ.get(auth.get("password_env", "")) or auth.get(
             "password"

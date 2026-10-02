@@ -238,7 +238,14 @@ class CandidateTest(unittest.TestCase):
         self,
     ) -> None:
         self.assertIn("@triton.jit", CANDIDATE)
-        self.assertIn("src.stride(4)", CANDIDATE)
+        # The source's five real strides must come from the tensor, never from a
+        # shape assumption.  Either form proves it: the indexed form
+        # ``src.stride(4)`` or the whole-tuple form ``src.stride()``, which the
+        # current member uses because one tuple call replaced thirteen indexed
+        # calls on a host-bound path (measured +1.9x on T4, 2026-10-02).
+        self.assertTrue(
+            "src.stride(4)" in CANDIDATE or "src.stride()" in CANDIDATE
+        )
         self.assertIn("tl.program_id", CANDIDATE)
 
     def test_kernel_reads_the_request_table_in_kernel(self) -> None:

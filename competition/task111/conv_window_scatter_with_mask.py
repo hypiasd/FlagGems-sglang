@@ -40,26 +40,25 @@ def _conv_window_scatter_kernel(
     dst_idx_ptr,
     step_idx_ptr,
     out_ptr,
-    dst_s0: tl.constexpr,
-    dst_s1: tl.constexpr,
-    dst_s2: tl.constexpr,
-    dst_s3: tl.constexpr,
-    src_s0: tl.constexpr,
-    src_s1: tl.constexpr,
-    src_s2: tl.constexpr,
-    src_s3: tl.constexpr,
-    src_s4: tl.constexpr,
-    out_s0: tl.constexpr,
-    out_s1: tl.constexpr,
-    out_s2: tl.constexpr,
-    out_s3: tl.constexpr,
-    CACHE: tl.constexpr,
-    DIM: tl.constexpr,
-    WINDOW: tl.constexpr,
-    N_CHUNK: tl.constexpr,
+    DST: tl.constexpr,
+    SRC: tl.constexpr,
+    OUT: tl.constexpr,
+    SHAPE: tl.constexpr,
     ROW_BLOCK: tl.constexpr,
-    REQUESTS: tl.constexpr,
 ):
+    # Packed launch scalars.  ``ROW_BLOCK`` deliberately stays its own constexpr
+    # parameter: ``tl.arange`` only accepts a parameter that is *annotated*
+    # constexpr, and a value derived by subscripting a constexpr tuple is a raw
+    # Python int on real hardware ("arange's arguments must be of type
+    # tl.constexpr", measured twice on 2026-10-02).
+    dst_s0 = (DST[0], DST[1], DST[2], DST[3])
+    src_s0 = (SRC[0], SRC[1], SRC[2], SRC[3], SRC[4])
+    out_s0 = (OUT[0], OUT[1], OUT[2], OUT[3])
+    CACHE = SHAPE[0]
+    DIM = SHAPE[1]
+    WINDOW = SHAPE[2]
+    N_CHUNK = SHAPE[3]
+    REQUESTS = SHAPE[4]
     position = tl.program_id(0)
     layer = position // (CACHE * N_CHUNK)
     rest = position % (CACHE * N_CHUNK)
@@ -84,7 +83,7 @@ def _conv_window_scatter_kernel(
     window_index = row % WINDOW
 
     dst_offset = (
-        layer * dst_s0 + slot * dst_s1 + dim_index * dst_s2 + window_index * dst_s3
+        layer * dst_s0[0] + slot * dst_s0[1] + dim_index * dst_s0[2] + window_index * dst_s0[3]
     )
     # Slots that resolve to a request overwrite their destination value, so
     # reading it first would be a dead load.  Dropping it removes the
@@ -92,17 +91,17 @@ def _conv_window_scatter_kernel(
     value = tl.load(dst_ptr + dst_offset, mask=in_row & (~hit), other=0.0)
 
     src_offset = (
-        layer * src_s0
-        + source * src_s1
-        + step * src_s2
-        + dim_index * src_s3
-        + window_index * src_s4
+        layer * src_s0[0]
+        + source * src_s0[1]
+        + step * src_s0[2]
+        + dim_index * src_s0[3]
+        + window_index * src_s0[4]
     )
     gathered = tl.load(src_ptr + src_offset, mask=in_row & hit, other=0.0)
     value = tl.where(hit, gathered, value)
 
     out_offset = (
-        layer * out_s0 + slot * out_s1 + dim_index * out_s2 + window_index * out_s3
+        layer * out_s0[0] + slot * out_s0[1] + dim_index * out_s0[2] + window_index * out_s0[3]
     )
     tl.store(out_ptr + out_offset, value, mask=in_row)
 
@@ -125,8 +124,11 @@ def conv_window_scatter_with_mask(dst, src, dst_indices_raw, step_indices_raw):
     layers, cache, dim, window = dst.shape
     requests = dst_indices_raw.shape[0]
     row_length = dim * window
-    row_block = min(triton.next_power_of_2(max(row_length, 1)), _ROW_CAP)
-    chunks = triton.cdiv(row_length, row_block)
+    # Inlined equivalents of triton.next_power_of_2 / triton.cdiv: both are Python
+    # helpers that re-validate their arguments on every call, and this path is
+    # host-bound, so the validation is pure overhead here.
+    row_block = 1 << (row_length - 1).bit_length() if 0 < row_length <= _ROW_CAP else _ROW_CAP
+    chunks = (row_length + row_block - 1) // row_block
     out = torch.empty_like(dst)
 
     _conv_window_scatter_kernel[(layers * cache * chunks,)](
@@ -135,24 +137,10 @@ def conv_window_scatter_with_mask(dst, src, dst_indices_raw, step_indices_raw):
         dst_indices_raw,
         step_indices_raw,
         out,
-        dst.stride(0),
-        dst.stride(1),
-        dst.stride(2),
-        dst.stride(3),
-        src.stride(0),
-        src.stride(1),
-        src.stride(2),
-        src.stride(3),
-        src.stride(4),
-        out.stride(0),
-        out.stride(1),
-        out.stride(2),
-        out.stride(3),
-        cache,
-        dim,
-        window,
-        chunks,
+        dst.stride(),
+        src.stride(),
+        out.stride(),
+        (cache, dim, window, chunks, requests),
         row_block,
-        requests,
     )
     return out
