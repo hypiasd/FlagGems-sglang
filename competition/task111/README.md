@@ -237,3 +237,65 @@ for i in range(REQUESTS):          →   for i in tl.static_range(REQUESTS):
 - 华为/沐曦：改用**整块加载请求表 + `tl.max` 归约**（把 `2*REQUESTS` 次依赖式标量 load 换成两次向量 load + 两次归约），本地 `validate_cpu` 10/10；已随 08:11 提交。
 - 天数智芯：08:07 起用**打包 constexpr**（19 个标量常量 → 4 个 constexpr 元组，内核参数 24 → 9），依据是 `triton/runtime/jit.py` 里 binder 每调用按**参数个数**重建 dict/specialization 列表。设备代码不变、无跨调用状态。因离散度问题，需要多条记录才能判断方向。
 - 昆仑芯：回到"开着 pass 编过去"的正题——整块归约是唯一"编译通过且函数体无循环"的版本，嫌疑在 `tl.max(axis=0)` 在 XPU 上的 lowering。
+
+---
+
+## T4 目标（10×）的合规天花板：量化到了小数点后两位
+
+### 真实硬件教我们的一个缺陷（已沉淀为本地闸门）
+
+08:07 把**打包 constexpr**（19 个标量常量 → 4 个 constexpr 元组，内核参数 24 → 9）试在天数智芯上，6 个用例全部编译失败：
+
+```
+ValueError:  arange's arguments must be of type tl.constexpr
+CompilationError: arange's arguments must be of type tl.constexpr
+```
+
+机制在 FlagTree 的 `triton/language/core.py` 里写得很直白：
+
+```python
+class constexpr:
+    def __getitem__(self, *args):
+        return self.value.__getitem__(*args)   # ← 返回裸值，不是 constexpr
+```
+
+所以 `ROW_BLOCK = SHAPE[4]` 拿到的是**裸 Python int**，而内核体里字面写的 `32` 会被前端自动包装——两者在 `tl.arange` 眼里不同。修法是 `tl.constexpr(SHAPE[4])`。
+
+这条失败已固化为 **`competition/adaptation/constexprs.py`**：对每个 `@triton.jit` 函数做 AST 检查，凡是"constexpr 参数的下标结果（或由它赋值的名字）"未经 `tl.constexpr(...)` 重新包装就进入 `tl.arange` 的，**提交前直接拦下**；并接进了 `gate`（5 个成员逐个检查）。两个方向的单测都钉住了（未包装 → 报错、已包装 → 通过）。CPU 语义模型也相应改成"constexpr 是 int/tuple 子类、下标返回裸值"的忠实行为。
+
+### 宿主端到底能省多少：用真轮子的生成代码量出来
+
+`triton/runtime/jit.py` 的 binder 是**每调用按参数个数重建**的：
+
+```python
+def dynamic_func(<每个参数>, **options):
+    params = {'<名>': <名>, ...}      # 每个参数一条 dict 项
+    specialization = [...]             # 每个参数一条列表项
+```
+
+用 wheel 里**真实的 `create_function_from_signature` / `compute_cache_key`**（只桩掉 `specialize_impl`，而它对两种配置调用次数相同）测每调用开销：
+
+```
+current  24 params: 2.645 us/call   (仅 Triton 宿主端记账)
+packed    9 params: 1.415 us/call
+saving            : 1.230 us/call  (46.5%)
+```
+
+### 但这离 10× 差得远——算得清
+
+T4 已有的 confirm 数据（同一批 10 个开发用例）：
+
+| 组 | 参考 | 公开发射路径 | 直连 `kernel.run` | 官方/合规可得 |
+|---|---:|---:|---:|---|
+| 8 个小形状 | 219 µs | **28.0 µs = 7.7×** | 17.0 µs = 13.8× | — |
+| all-invalid（参考就是一次 clone） | 53.5 µs | 28.7 µs = 1.87× | 18.6 µs = 3.01× | — |
+| 大形状 2.1M 元素 | 267 µs | 78.9 µs = 3.38× | 76.7 µs = 3.48× | — |
+| **10 例均值** | | **6.77×** | **11.59×** | |
+
+- 公开路径与直连的差 **11.5 µs**，就是 `JITFunction.run` 的每调用记账；
+- 其中 binder+cache-key 只占 **2.6 µs**，打包能拿回 **1.23 µs**（再加两处 `*bound_args.values()` 各少解包 15 个参数，约 +0.5 µs）；
+- 合计投影：小形状 28.0 → **26.3 µs ≈ 8.3×**，10 例均值 6.77 → **约 7.2×**。
+
+**要拿到 10× 均值，小形状必须 ≤ 18.4 µs**（因为 all-invalid 3×、大形状 3.5× 已经把均值压住）——而合规路径的每调用地板是 26.3 µs，比 10× 所需还慢 **7.9 µs**。这 7.9 µs 分布在 `driver.active.get_current_device/get_current_stream`、`device_caches` 查找、`_musa_target_capability`、`launch_metadata`（在 `launch_enter_hook` 非 None 时每调用构造一个 `LazyDict`，而那是 Triton 全局 knob，不是我们该改的）与两次 `bound_args.values()` 解包上，**不持有跨调用状态就拿不掉**。
+
+结论：**"在 T4 上把 10 例均值做到 10×"在平台"不得有跨调用缓存"的规则下不可达**；可达的合规水平是 **~7.2×**。K 的 11.59× 完全来自跨调用持有编译好的 kernel（模块级容器，已被平台拒绝），我不打算用函数属性之类的手法绕过同一意图。

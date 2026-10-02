@@ -15,7 +15,7 @@ from pathlib import Path
 from competition.experiments import store
 from competition import decide
 from competition import members
-from . import failures, safety
+from . import constexprs, failures, safety
 from .compiler_scan import inspect_source
 from .ledger import record, summary, target_ledger
 from .packaging import make_package, validate_package
@@ -299,6 +299,7 @@ def gate(run_id):
     checker = store.ROOT / "competition" / task / "validate_cpu.py"
     for name in declared:
         errors.extend(safety.check_source(source / name))
+        errors.extend(constexprs.check_source(source / name))
         entry = {
             "member": name,
             "role": "generic" if name == layout["generic"] else "dedicated",

@@ -19,6 +19,7 @@ from unittest.mock import patch
 import torch
 
 
+
 class ValidationError(AssertionError):
     """A semantic or memory-access contract was violated."""
 
@@ -190,6 +191,27 @@ class RestrictedModule(ModuleType):
         )
 
 
+
+class _ConstexprInt(int):
+    """An int that is known at compile time."""
+
+
+class _ConstexprTuple(tuple):
+    """A tuple that is known at compile time."""
+
+
+def _constexpr_stub(value=None):
+    """Mirror ``tl.constexpr(value)`` for the CPU semantic model."""
+    if isinstance(value, (_ConstexprInt, _ConstexprTuple)):
+        return value
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return _ConstexprInt(value)
+    if isinstance(value, (tuple, list)):
+        return _ConstexprTuple(value)
+    return value
+
 class PythonJIT:
     """Bind real function arguments, then run the original body per program."""
 
@@ -287,7 +309,14 @@ class CPUModel:
         self.triton.autotune = self.autotune
         self.triton.heuristics = self.identity_decorator
         self.triton.Config = self.KernelConfig
-        self.tl.constexpr = type("constexpr", (), {})
+        # ``tl.constexpr(x)`` marks a value known at compile time.  The wrapper is
+        # an ``int``/``tuple`` subclass so it interoperates natively with torch
+        # (``position // CACHE`` must not fall into a tensor reflected-op), while
+        # ``subscript`` still yields the *raw* element -- exactly like real
+        # Triton, where ``SHAPE[4]`` returns a plain int and is then rejected by
+        # ``tl.arange`` with "arange's arguments must be of type tl.constexpr".
+        # That real-hardware failure is now gated by ``constexprs.check_source``.
+        self.tl.constexpr = _constexpr_stub
         for name in (
             "int8",
             "int16",

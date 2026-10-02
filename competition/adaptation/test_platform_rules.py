@@ -11,7 +11,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from competition.adaptation import failures, safety
+from competition.adaptation import constexprs, failures, safety
 
 
 def errors_for(source: str) -> list[str]:
@@ -204,3 +204,56 @@ class FailureLedger(unittest.TestCase):
             ),
             [],
         )
+
+class ConstexprUnpackingRule(unittest.TestCase):
+    """A tl.constexpr subscript returns a raw value; arange then refuses it."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+
+    def write_temp(self, name: str, text: str) -> Path:
+        path = Path(self._tmp.name) / name
+        path.write_text(text, encoding="utf-8")
+        return path
+
+
+    def test_an_unpacked_constexpr_is_rejected(self) -> None:
+        """The failure that cost a submission on 2026-10-02 08:07.
+
+        ``constexpr.__getitem__`` returns the raw element, so a name bound from
+        ``SHAPE[4]`` is a plain int and ``tl.arange`` refuses it on real
+        hardware.  The gate must catch the pattern locally instead.
+        """
+        path = self.write_temp(
+            "bad.py",
+            """
+import triton
+import triton.language as tl
+
+
+@triton.jit
+def k(p, SHAPE: tl.constexpr):
+    row_block = SHAPE[4]
+    row = tl.arange(0, row_block)
+""",
+        )
+        errors = constexprs.check_source(path)
+        self.assertEqual(len(errors), 1)
+        self.assertIn("tl.constexpr", errors[0])
+
+    def test_a_rewrapped_constexpr_is_accepted(self) -> None:
+        path = self.write_temp(
+            "good.py",
+            """
+import triton
+import triton.language as tl
+
+
+@triton.jit
+def k(p, SHAPE: tl.constexpr):
+    row_block = tl.constexpr(SHAPE[4])
+    row = tl.arange(0, row_block)
+""",
+        )
+        self.assertEqual(constexprs.check_source(path), [])
