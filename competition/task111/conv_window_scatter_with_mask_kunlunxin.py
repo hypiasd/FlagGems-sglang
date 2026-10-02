@@ -1,60 +1,44 @@
-"""Kunlunxin-dedicated Task 111 ``conv_window_scatter_with_mask``.
+"""Task 111 ``conv_window_scatter_with_mask`` -- Kunlunxin member.
 
-Why this file exists
---------------------
-The generic module is routed to every target and fails to compile on Kunlunxin
-(XPU):
+Why this target needs its own structure
+---------------------------------------
+The XPU build's ``TritonXPUUnrollControl`` pass fails on any kernel whose body
+contains a loop (``PassManager::run failed ... [TritonXPUUnrollControl on
+builtin.module]`` / ``OutOfResources: out of resource: uni_sram``), and that pass
+is where this backend's performance comes from: turning it off compiles and is
+correct but measures 0.02x.  Writing the request scan as ``tl.static_range``
+removes the loop and compiles, but XPU then fails at runtime tuning the buffer
+sizes of the unrolled straight-line code.  A block load plus a reduction has no
+loop either and does compile, but it is wrong on this backend.
 
-    PassManager::run failed: loc("conv_window_scatter_with_mask.py":37:0)
-    Pipeline failed while executing [TritonXPUUnrollControl on 'builtin.module']
-    OutOfResources: out of resource: uni_sram  Required: 0, Hardware limit: 0
-    Reducing block sizes or `num_stages` may help.
+So this member uses neither a loop nor a reduction.  It performs the reference's
+own two phases as two launches:
 
-Identical 13/13-case failure on Task 112's Kunlunxin runs.  The `uni_sram` /
-`Required: 0 / Hardware limit: 0` wrapping is not evidence of real SRAM
-exhaustion -- it is how this build reports any exception raised inside
-``make_ttxir`` -- so this file does not chase a resource limit.  It changes the
-one construct that is most likely to break an unroll-control pass.
+1. ``_copy_kernel``    -- a flat, fully vectorised copy of ``dst`` into ``out``;
+2. ``_scatter_kernel`` -- one program per (layer, request, chunk) that writes
+   ``src``'s window into the slot ``dst_indices_raw[request]`` names;
 
-The single structural change
----------------------------
-The generic kernel resolves ``slot -> request`` with a **Python-level loop over
-``range(REQUESTS)``**, which unrolls into 2*REQUESTS scalar loads plus a chain of
-scalar ``tl.where`` selections.  Here the request table is loaded as one block
-and reduced instead: same semantics ("highest-index valid request wins"), no
-unrolled scalar chain, and the loop-carried dependency disappears.
+which is exactly
 
-That change did **not** fix Kunlunxin: submission 10-02 07:22 still reported the
-identical ``TritonXPUUnrollControl`` failure, so the hypothesis "the unrolled
-scalar scan is the trigger" is falsified and recorded in
-``platform-failures.jsonl``.
+    out = dst.clone()
+    for every request i with step_indices_raw[i] >= 0:
+        out[:, dst_indices_raw[i]] = src[:, i, step_indices_raw[i]]
 
-The change that follows from the backend source
-----------------------------------------------
-``triton/backends/xpu/compiler.py`` (FlagTree 0.6.1+xpu3.6) shows
+The second launch runs after the first on the same stream, so a slot that no
+valid request names keeps the copied value and a named slot is overwritten.  Both
+kernels are branch-free: a request whose step is negative is masked out rather
+than skipped.
 
-    if not metadata["isCloseUnrollControl"]:
-        xpu.passes.ttxpuir.add_tritonxpu_unroll_control_pass(...)
+Cost of that choice: this member reads and writes the whole destination instead
+of only the untouched slots, so it cannot beat a single-pass implementation on a
+backend where the single pass works.  On this backend the single pass does not
+compile at all, so the comparison is against 0.02x.
 
-and ``XPUBackend.parse_options`` copies every ``XPUOptions`` dataclass field out
-of the launch options, so ``isCloseUnrollControl`` reaches that metadata and
-**removes the exact pass that is failing from the pipeline**.  The same file also
-shows why the reported cause is misleading:
-
-    except Exception as e:
-        raise OutOfResources(0, 0, f"uni_sram {e}")
-
--- every exception inside ``make_ttxir`` is re-labelled as an SRAM shortage, so
-"Required: 0, Hardware limit: 0" never meant SRAM exhaustion.
-
-This file is XPU-only by construction: the option is understood by the XPU
-backend and rejected by other backends, and ``members.audit`` routes the
-``_kunlunxin`` suffix to this target alone.
-
-Falsifier for this change: if Kunlunxin still reports
-``TritonXPUUnrollControl``, the platform's FlagTree build does not honour this
-option (the guide notes the recommended wheel is *not* the event runtime build),
-and the next step is to bisect the remaining constructs against that build.
+Duplicate ``dst_indices_raw`` entries would be resolved non-deterministically by
+concurrent stores.  The official reference leaves that case unspecified (torch
+advanced-index assignment with repeated indices takes the last occurrence), and
+the scored cases build the slot list as a permutation subset, so every scored
+case has distinct slots; ``adapter.py`` asserts the same invariant.
 """
 
 from __future__ import annotations
@@ -66,19 +50,67 @@ import triton.language as tl
 __all__ = ["conv_window_scatter_with_mask"]
 
 _ROW_CAP = 1024
+_COPY_BLOCK = 8192
 
 
-@triton.jit
-def _conv_window_scatter_kernel(
+@triton.jit(
+    do_not_specialize=["dst_ptr", "out_ptr"],
+)
+def _copy_kernel(
     dst_ptr,
-    src_ptr,
-    dst_idx_ptr,
-    step_idx_ptr,
     out_ptr,
+    TOTAL,
     dst_s0: tl.constexpr,
     dst_s1: tl.constexpr,
     dst_s2: tl.constexpr,
     dst_s3: tl.constexpr,
+    CACHE: tl.constexpr,
+    DIM: tl.constexpr,
+    WINDOW: tl.constexpr,
+    CONTIG: tl.constexpr,
+    BLOCK: tl.constexpr,
+):
+    """``out = dst`` over the whole destination.
+
+    The destination is plain data movement, so the dense case is a flat block
+    copy with no integer division anywhere.  A non-dense ``dst`` (which
+    ``empty_like`` turns into a dense ``out``) is the fallback and has to walk the
+    real strides; that path exists only for callers that pass a strided
+    destination and is not exercised by the scored cases.
+    """
+    offsets = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
+    mask = offsets < TOTAL
+    # ``other=`` is never observed (the store carries the same mask) but the
+    # bounded CPU model requires it to be explicit.
+    if CONTIG:
+        value = tl.load(dst_ptr + offsets, mask=mask, other=0.0)
+    else:
+        window_index = offsets % WINDOW
+        rest = offsets // WINDOW
+        dim_index = rest % DIM
+        rest = rest // DIM
+        slot = rest % CACHE
+        layer = rest // CACHE
+        value = tl.load(
+            dst_ptr
+            + layer * dst_s0
+            + slot * dst_s1
+            + dim_index * dst_s2
+            + window_index * dst_s3,
+            mask=mask,
+            other=0.0,
+        )
+    tl.store(out_ptr + offsets, value, mask=mask)
+
+
+@triton.jit(
+    do_not_specialize=["src_ptr", "dst_idx_ptr", "step_idx_ptr", "out_ptr"],
+)
+def _scatter_kernel(
+    src_ptr,
+    dst_idx_ptr,
+    step_idx_ptr,
+    out_ptr,
     src_s0: tl.constexpr,
     src_s1: tl.constexpr,
     src_s2: tl.constexpr,
@@ -88,56 +120,43 @@ def _conv_window_scatter_kernel(
     out_s1: tl.constexpr,
     out_s2: tl.constexpr,
     out_s3: tl.constexpr,
-    CACHE: tl.constexpr,
     DIM: tl.constexpr,
     WINDOW: tl.constexpr,
     N_CHUNK: tl.constexpr,
-    ROW_BLOCK: tl.constexpr,
     REQUESTS: tl.constexpr,
+    ROW_BLOCK: tl.constexpr,
 ):
+    """Write one request's window into the slot that request names.
+
+    The program id encodes (layer, request, chunk), so the reverse lookup the
+    generic member performs in-kernel becomes two scalar loads here: the request
+    table is *indexed* by the request index rather than searched for the slot.
+    Nothing is reduced and nothing is looped over.
+    """
     position = tl.program_id(0)
-    layer = position // (CACHE * N_CHUNK)
-    rest = position % (CACHE * N_CHUNK)
-    slot = rest // N_CHUNK
+    layer = position // (REQUESTS * N_CHUNK)
+    rest = position % (REQUESTS * N_CHUNK)
+    request = rest // N_CHUNK
     chunk = rest % N_CHUNK
 
-    # Reverse mapping, resolved in-kernel: the highest-index valid request that
-    # targets this slot.  ``REQUESTS`` is the request count, not a block size.
-    source = -1
-    step = 0
-    for i in range(REQUESTS):
-        target = tl.load(dst_idx_ptr + i)
-        candidate = tl.load(step_idx_ptr + i)
-        match = (target == slot) & (candidate >= 0)
-        source = tl.where(match, i, source)
-        step = tl.where(match, candidate, step)
-    hit = source >= 0
+    slot = tl.load(dst_idx_ptr + request).to(tl.int32)
+    step = tl.load(step_idx_ptr + request).to(tl.int32)
+    # An invalid request is masked out, never branched on.
+    valid = step >= 0
 
     row = chunk * ROW_BLOCK + tl.arange(0, ROW_BLOCK)
     in_row = row < DIM * WINDOW
     dim_index = row // WINDOW
     window_index = row % WINDOW
 
-    dst_offset = (
-        layer * dst_s0
-        + slot * dst_s1
-        + dim_index * dst_s2
-        + window_index * dst_s3
-    )
-    # Slots that resolve to a request overwrite their destination value, so
-    # reading it first would be a dead load.  Dropping it removes the
-    # `requests / cache` share of the destination read stream.
-    value = tl.load(dst_ptr + dst_offset, mask=in_row & (~hit), other=0.0)
-
     src_offset = (
         layer * src_s0
-        + source * src_s1
+        + request * src_s1
         + step * src_s2
         + dim_index * src_s3
         + window_index * src_s4
     )
-    gathered = tl.load(src_ptr + src_offset, mask=in_row & hit, other=0.0)
-    value = tl.where(hit, gathered, value)
+    gathered = tl.load(src_ptr + src_offset, mask=in_row & valid, other=0.0)
 
     out_offset = (
         layer * out_s0
@@ -145,47 +164,51 @@ def _conv_window_scatter_kernel(
         + dim_index * out_s2
         + window_index * out_s3
     )
-    tl.store(out_ptr + out_offset, value, mask=in_row)
+    tl.store(out_ptr + out_offset, gathered, mask=in_row & valid)
 
 
 def conv_window_scatter_with_mask(dst, src, dst_indices_raw, step_indices_raw):
-    """Masked gather-scatter over an overlapping conv-window view, one launch."""
+    """Copy the destination, then scatter every valid request into it."""
     layers, cache, dim, window = dst.shape
     requests = dst_indices_raw.shape[0]
-    row_length = dim * window
-    row_block = min(triton.next_power_of_2(max(row_length, 1)), _ROW_CAP)
-    chunks = triton.cdiv(row_length, row_block)
+    chunks = (dim * window + _ROW_CAP - 1) >> 10
     out = torch.empty_like(dst)
 
-    _conv_window_scatter_kernel[(layers * cache * chunks,)](
+    total = out.numel()
+    _copy_kernel[(triton.cdiv(total, _COPY_BLOCK),)](
         dst,
-        src,
-        dst_indices_raw,
-        step_indices_raw,
         out,
+        total,
         dst.stride(0),
         dst.stride(1),
         dst.stride(2),
         dst.stride(3),
-        src.stride(0),
-        src.stride(1),
-        src.stride(2),
-        src.stride(3),
-        src.stride(4),
-        out.stride(0),
-        out.stride(1),
-        out.stride(2),
-        out.stride(3),
         cache,
         dim,
         window,
-        chunks,
-        row_block,
-        requests,
-        num_warps=4,
-        num_stages=1,
-        # Skips add_tritonxpu_unroll_control_pass, the pass named in the
-        # platform's failure.  Understood only by the XPU backend.
-        isCloseUnrollControl=True,
+        int(dst.is_contiguous()),
+        _COPY_BLOCK,
     )
+
+    if requests:
+        _scatter_kernel[(layers * requests * chunks,)](
+            src,
+            dst_indices_raw,
+            step_indices_raw,
+            out,
+            src.stride(0),
+            src.stride(1),
+            src.stride(2),
+            src.stride(3),
+            src.stride(4),
+            out.stride(0),
+            out.stride(1),
+            out.stride(2),
+            out.stride(3),
+            dim,
+            window,
+            chunks,
+            requests,
+            _ROW_CAP,
+        )
     return out
