@@ -290,3 +290,16 @@ class CandidateTest(unittest.TestCase):
         """The reverse mapping must happen inside the kernel, not in torch."""
         self.assertIn("for i in range(REQUESTS)", CANDIDATE)
         self.assertIn("tl.load(dst_idx_ptr + i)", CANDIDATE)
+
+    def test_a_non_contiguous_destination_keeps_its_own_stride_path(self) -> None:
+        """Only a dense ``dst`` may have its dst/out strides derived from the
+        shape.  The branch that carries explicit strides must stay in the module:
+        ``src`` is always an overlapping as_strided view, so its strides always
+        come from the tensor, and a non-dense ``dst`` has no shape-derived
+        strides at all.  On the T4 both branches were checked bit-for-bit against
+        the previous member on fp32 and fp16 non-contiguous destinations; this
+        test keeps the branch from being deleted as dead code.
+        """
+        self.assertIn("dst.is_contiguous()", CANDIDATE)
+        self.assertIn("dst.stride() + src.stride() + out.stride()", CANDIDATE)
+        self.assertIn("src.stride()", CANDIDATE)

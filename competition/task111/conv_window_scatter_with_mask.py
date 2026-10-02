@@ -57,6 +57,7 @@ def _conv_window_scatter_kernel(
     ROW_BLOCK: tl.constexpr,
     IDX64: tl.constexpr,
     DTYPE: tl.constexpr,
+    CONTIG: tl.constexpr,
 ):
     # One constexpr tuple instead of four: Triton's binder rebuilds a dict entry
     # and a cache-key entry per parameter on every call, so few parameters beat
@@ -95,15 +96,25 @@ def _conv_window_scatter_kernel(
     step_idx_ptr = tl.cast(step_idx_addr, tl.pointer_type(index_ty))
     # ``dst.shape`` travels whole: unpacking it on the host and re-packing four
     # scalars measured 0.66 us per call, more than either selection above.
-    dst_s0 = (LAYOUT[0], LAYOUT[1], LAYOUT[2], LAYOUT[3])
-    src_s0 = (LAYOUT[4], LAYOUT[5], LAYOUT[6], LAYOUT[7], LAYOUT[8])
-    out_s0 = (LAYOUT[9], LAYOUT[10], LAYOUT[11], LAYOUT[12])
-    SHAPE = LAYOUT[13]
+    SHAPE = LAYOUT[0]
     CACHE = SHAPE[1]
     DIM = SHAPE[2]
     WINDOW = SHAPE[3]
-    N_CHUNK = LAYOUT[14]
-    REQUESTS = LAYOUT[15]
+    N_CHUNK = LAYOUT[1]
+    REQUESTS = LAYOUT[2]
+    if CONTIG:
+        # A contiguous ``dst`` also gives a contiguous ``out`` (empty_like keeps
+        # the layout of a non-overlapping dense input), so both sets of strides
+        # follow from the shape alone.  Deriving them here is free -- it is
+        # compile-time integer arithmetic -- and it saves the host two
+        # ``.stride()`` calls and eight entries of the per-call cache key.
+        dst_s0 = (WINDOW * DIM * CACHE, WINDOW * DIM, WINDOW, 1)
+        out_s0 = dst_s0
+        src_s0 = (LAYOUT[3], LAYOUT[4], LAYOUT[5], LAYOUT[6], LAYOUT[7])
+    else:
+        dst_s0 = (LAYOUT[3], LAYOUT[4], LAYOUT[5], LAYOUT[6])
+        src_s0 = (LAYOUT[7], LAYOUT[8], LAYOUT[9], LAYOUT[10], LAYOUT[11])
+        out_s0 = (LAYOUT[12], LAYOUT[13], LAYOUT[14], LAYOUT[15])
     position = tl.program_id(0)
     layer = position // (CACHE * N_CHUNK)
     rest = position % (CACHE * N_CHUNK)
@@ -167,14 +178,16 @@ def conv_window_scatter_with_mask(dst, src, dst_indices_raw, step_indices_raw):
     thousands of elements and the device runs out of parallelism.
 
     The launch passes five **addresses** -- ``dst``, ``src``, both index tensors
-    and the freshly allocated output -- plus one constexpr tuple holding the
-    thirteen real strides of ``dst``/``src``/``out``, ``dst.shape`` and two
-    shape-derived constants, plus the pointer-width and element-type codes.  All
-    five tensors stay referenced by the caller's locals for the whole launch, so
-    the addresses remain valid; passing them as integers instead of tensors is
-    what avoids the launch path holding the output allocation.  Triton keys its
-    compiled-kernel cache on the constexpr tuple, so a new stride layout costs one
-    compilation and every later call with the same layout reuses it -- without
+    and the freshly allocated output -- plus one constexpr tuple carrying
+    ``dst.shape``, the chunk count, the request count and the strides.  A dense
+    ``dst`` (the usual case) sends only ``src``'s five strides, because the kernel
+    derives the other eight from the shape; a non-dense ``dst`` sends all
+    thirteen.  All five tensors stay referenced by the caller's locals for the
+    whole launch, so the addresses remain valid; passing them as integers instead
+    of tensors is what avoids the launch path holding the output allocation.
+    Triton keys its compiled-kernel cache on the constexpr tuple, so a new stride
+    layout costs one compilation and every later call with the same layout reuses
+    it -- without
     this module holding any state of its own, which a cached plan would require
     and which the platform forbids.
     """
@@ -186,16 +199,26 @@ def conv_window_scatter_with_mask(dst, src, dst_indices_raw, step_indices_raw):
     # size the block buys nothing.
     chunks = (dim * window + _ROW_CAP - 1) >> 10
     out = torch.empty_like(dst)
+    # ``src`` is an overlapping as_strided view, so its strides must always come
+    # from the tensor.  ``dst``/``out`` only need theirs when ``dst`` is not
+    # dense: otherwise the kernel derives both from the shape.  Both branches
+    # launch the same Triton kernel, just with different constexprs.
+    head = (shape, chunks, dst_indices_raw.shape[0])
+    if dst.is_contiguous():
+        layout, contig = head + src.stride(), 1
+    else:
+        layout, contig = head + dst.stride() + src.stride() + out.stride(), 0
     _conv_window_scatter_kernel.run(
         dst.data_ptr(),
         src.data_ptr(),
         dst_indices_raw.data_ptr(),
         step_indices_raw.data_ptr(),
         out.data_ptr(),
-        dst.stride() + src.stride() + out.stride() + (shape, chunks, dst_indices_raw.shape[0]),
+        layout,
         _ROW_CAP,
         int(dst_indices_raw.dtype == torch.int64),
         1 if dst.dtype == torch.float16 else (2 if dst.dtype == torch.bfloat16 else 0),
+        contig,
         grid=(shape[0] * cache * chunks,),
         warmup=False,
     )
