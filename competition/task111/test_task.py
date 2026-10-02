@@ -17,6 +17,8 @@ import json
 import unittest
 from pathlib import Path
 
+from competition import members
+
 ROOT = Path(__file__).resolve().parents[2]
 TASK = ROOT / "competition/task111"
 PROFILE = json.loads((TASK / "profile.json").read_text())
@@ -303,3 +305,61 @@ class CandidateTest(unittest.TestCase):
         self.assertIn("dst.is_contiguous()", CANDIDATE)
         self.assertIn("dst.stride() + src.stride() + out.stride()", CANDIDATE)
         self.assertIn("src.stride()", CANDIDATE)
+
+
+class ChipRoutingTest(unittest.TestCase):
+    """Routing is a risk decision here, not a copy, and it must be pinned.
+
+    The address-based launch is verified only on the NVIDIA-class device this
+    repository can measure (bit-identical to the tensor-argument launch across
+    dtypes, strided destinations, int64 index inputs and all-invalid cases).  The
+    two chip families we cannot measure -- Iluvatar and Hygon -- therefore keep a
+    member that passes tensors and uses only standard ``@triton.jit`` options,
+    even though the address form measures faster.  A silent re-route would move
+    an unverified launch onto a target whose failure costs a submission slot.
+    """
+
+    def test_each_measurable_target_gets_the_address_member(self) -> None:
+        layout = members.discover(
+            PROFILE["operator"], TASK, PROFILE["targets"], PROFILE["package_members"]
+        )
+        resolved, unresolved = members.target_sources(
+            PROFILE["operator"], PROFILE["targets"], layout
+        )
+        self.assertEqual(unresolved, [])
+        self.assertIs(resolved["intl_a"], layout["generic"])
+        self.assertIs(resolved["intl_b"], layout["generic"])
+        self.assertEqual(
+            resolved["iluvatar"], "conv_window_scatter_with_mask_iluvatar.py"
+        )
+        self.assertEqual(resolved["hygon"], "conv_window_scatter_with_mask_hygon.py")
+        self.assertEqual(
+            resolved["kunlunxin"], "conv_window_scatter_with_mask_kunlunxin.py"
+        )
+        self.assertEqual(
+            resolved["ascend"], "conv_window_scatter_with_mask_ascend.py"
+        )
+        self.assertEqual(resolved["metax"], "conv_window_scatter_with_mask_metax.py")
+
+    def test_the_conservative_members_avoid_the_unverified_launch(self) -> None:
+        for name in ("iluvatar", "hygon"):
+            text = (TASK / f"conv_window_scatter_with_mask_{name}.py").read_text()
+            self.assertNotIn("data_ptr()", text, name)
+            self.assertNotIn("tl.cast", text, name)
+            self.assertIn("_conv_window_scatter_kernel.run(", text, name)
+
+    def test_the_conservative_members_carry_no_fallback(self) -> None:
+        for name in ("iluvatar", "hygon"):
+            text = (TASK / f"conv_window_scatter_with_mask_{name}.py").read_text()
+            tree = ast.parse(text)
+            self.assertFalse(
+                [node for node in ast.walk(tree) if isinstance(node, ast.Try)], name
+            )
+
+    def test_the_two_conservative_members_are_the_same_risk_decision(self) -> None:
+        # Both unmeasurable families carry the identical bytes, so a fix applied
+        # to one is obviously meant for the other.
+        iluvatar = (TASK / "conv_window_scatter_with_mask_iluvatar.py").read_bytes()
+        hygon = (TASK / "conv_window_scatter_with_mask_hygon.py").read_bytes()
+        self.assertEqual(iluvatar, hygon)
+        self.assertNotEqual(iluvatar, CANDIDATE.encode())

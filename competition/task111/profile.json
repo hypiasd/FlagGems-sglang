@@ -5,6 +5,8 @@
   "entrypoint": "conv_window_scatter_with_mask(dst, src, dst_indices_raw, step_indices_raw)",
   "package_members": [
     "conv_window_scatter_with_mask.py",
+    "conv_window_scatter_with_mask_iluvatar.py",
+    "conv_window_scatter_with_mask_hygon.py",
     "conv_window_scatter_with_mask_kunlunxin.py",
     "conv_window_scatter_with_mask_ascend.py",
     "conv_window_scatter_with_mask_metax.py"
