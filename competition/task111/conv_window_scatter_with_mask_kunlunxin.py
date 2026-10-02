@@ -1,44 +1,41 @@
 """Task 111 ``conv_window_scatter_with_mask`` -- Kunlunxin member.
 
-Why this target needs its own structure
----------------------------------------
-The XPU build's ``TritonXPUUnrollControl`` pass fails on any kernel whose body
-contains a loop (``PassManager::run failed ... [TritonXPUUnrollControl on
-builtin.module]`` / ``OutOfResources: out of resource: uni_sram``), and that pass
-is where this backend's performance comes from: turning it off compiles and is
-correct but measures 0.02x.  Writing the request scan as ``tl.static_range``
-removes the loop and compiles, but XPU then fails at runtime tuning the buffer
-sizes of the unrolled straight-line code.  A block load plus a reduction has no
-loop either and does compile, but it is wrong on this backend.
+Isolating the one variable that separates 0.02x from 7.17x
+---------------------------------------------------------
+Three bespoke device-side designs have now been falsified on this backend:
 
-So this member uses neither a loop nor a reduction.  It performs the reference's
-own two phases as two launches:
+* a body loop -> ``TritonXPUUnrollControl`` fails the pipeline;
+* 2-D ``tl.arange(0, N)[:, None]`` -> ``TritonXPULegalize`` fails the pipeline
+  (``tt.make_range`` size mismatch), and the failure text named that construct
+  at the exact line;
+* the reverse-lookup body (1-D blocks, loop-free, no 0-d scalar load indexing
+  memory, addresses affine in ``program_id``) *compiles* and returns a wrong
+  result -- 82.3% of Case 1 and 83.2% of Case 3 mismatched.
 
-1. ``_copy_kernel``    -- a flat, fully vectorised copy of ``dst`` into ``out``;
-2. ``_scatter_kernel`` -- one program per (layer, request, chunk) that writes
-   ``src``'s window into the slot ``dst_indices_raw[request]`` names;
+Meanwhile one member has always compiled and always been correct on this
+backend: the generic module.  It scored 0.02x here while the *same idea* scores
+7.17x on intl_a, and the only structural difference between the two is how the
+pointer arguments reach the kernel:
 
-which is exactly
+* the generic (R10) passes five ``data_ptr()`` integers and rebuilds them inside
+  the kernel with ``tl.cast(addr, tl.pointer_type(elem_ty))``;
+* this member passes the tensors themselves, so the backend sees typed,
+  specialised pointers from the launcher.
 
-    out = dst.clone()
-    for every request i with step_indices_raw[i] >= 0:
-        out[:, dst_indices_raw[i]] = src[:, i, step_indices_raw[i]]
+An integer that is cast to a pointer inside the body carries no alignment or
+contiguity information, which is precisely the kind of fact a code generator
+uses to pick vectorised, coalesced accesses over scalar ones.  A 50x gap is
+what that looks like when it goes the wrong way.
 
-The second launch runs after the first on the same stream, so a slot that no
-valid request names keeps the copied value and a named slot is overwritten.  Both
-kernels are branch-free: a request whose step is negative is masked out rather
-than skipped.
+So this member is the intl_a/hygon byte-for-byte body: the packed-constexpr,
+loop-scanning generic with real tensor pointer arguments.  It is the same
+correctness evidence as the two targets already shipping it (10/10 CPU
+semantic cases), and it changes exactly one variable against the 0.02x member.
 
-Cost of that choice: this member reads and writes the whole destination instead
-of only the untouched slots, so it cannot beat a single-pass implementation on a
-backend where the single pass works.  On this backend the single pass does not
-compile at all, so the comparison is against 0.02x.
-
-Duplicate ``dst_indices_raw`` entries would be resolved non-deterministically by
-concurrent stores.  The official reference leaves that case unspecified (torch
-advanced-index assignment with repeated indices takes the last occurrence), and
-the scored cases build the slot list as a permutation subset, so every scored
-case has distinct slots; ``adapter.py`` asserts the same invariant.
+Falsifier: if this reports 0.02x as well, the ``tl.cast`` hypothesis is wrong
+and the gap is the request-scan loop itself; if it reports anything near the
+other targets, the generic module's pointer passing is what cost this target
+50x all along.
 """
 
 from __future__ import annotations
@@ -49,67 +46,20 @@ import triton.language as tl
 
 __all__ = ["conv_window_scatter_with_mask"]
 
-_COPY_BLOCK = 8192
+_ROW_CAP = 1024
 
 
-@triton.jit(
-    do_not_specialize=["dst_ptr", "out_ptr"],
-)
-def _copy_kernel(
+@triton.jit
+def _conv_window_scatter_kernel(
     dst_ptr,
-    out_ptr,
-    TOTAL,
-    dst_s0: tl.constexpr,
-    dst_s1: tl.constexpr,
-    dst_s2: tl.constexpr,
-    dst_s3: tl.constexpr,
-    CACHE: tl.constexpr,
-    DIM: tl.constexpr,
-    WINDOW: tl.constexpr,
-    CONTIG: tl.constexpr,
-    BLOCK: tl.constexpr,
-):
-    """``out = dst`` over the whole destination.
-
-    The destination is plain data movement, so the dense case is a flat block
-    copy with no integer division anywhere.  A non-dense ``dst`` (which
-    ``empty_like`` turns into a dense ``out``) is the fallback and has to walk the
-    real strides; that path exists only for callers that pass a strided
-    destination and is not exercised by the scored cases.
-    """
-    offsets = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
-    mask = offsets < TOTAL
-    # ``other=`` is never observed (the store carries the same mask) but the
-    # bounded CPU model requires it to be explicit.
-    if CONTIG:
-        value = tl.load(dst_ptr + offsets, mask=mask, other=0.0)
-    else:
-        window_index = offsets % WINDOW
-        rest = offsets // WINDOW
-        dim_index = rest % DIM
-        rest = rest // DIM
-        slot = rest % CACHE
-        layer = rest // CACHE
-        value = tl.load(
-            dst_ptr
-            + layer * dst_s0
-            + slot * dst_s1
-            + dim_index * dst_s2
-            + window_index * dst_s3,
-            mask=mask,
-            other=0.0,
-        )
-    tl.store(out_ptr + offsets, value, mask=mask)
-
-
-@triton.jit(
-    do_not_specialize=["src_ptr", "dst_idx_ptr", "step_idx_ptr", "out_ptr"],
-)
-def _scatter_kernel(
     src_ptr,
     dst_idx_ptr,
     step_idx_ptr,
     out_ptr,
+    dst_s0: tl.constexpr,
+    dst_s1: tl.constexpr,
+    dst_s2: tl.constexpr,
+    dst_s3: tl.constexpr,
     src_s0: tl.constexpr,
     src_s1: tl.constexpr,
     src_s2: tl.constexpr,
@@ -119,98 +69,106 @@ def _scatter_kernel(
     out_s1: tl.constexpr,
     out_s2: tl.constexpr,
     out_s3: tl.constexpr,
+    CACHE: tl.constexpr,
     DIM: tl.constexpr,
     WINDOW: tl.constexpr,
-    DIM_BLOCK: tl.constexpr,
-    WINDOW_BLOCK: tl.constexpr,
+    N_CHUNK: tl.constexpr,
+    ROW_BLOCK: tl.constexpr,
+    REQUESTS: tl.constexpr,
 ):
-    """Write one request's window into the slot that request names.
+    position = tl.program_id(0)
+    layer = position // (CACHE * N_CHUNK)
+    rest = position % (CACHE * N_CHUNK)
+    slot = rest // N_CHUNK
+    chunk = rest % N_CHUNK
 
-    The grid is two-dimensional -- ``program_id(0)`` is the request and
-    ``program_id(1)`` is the layer -- and the window is a two-dimensional block,
-    so this body contains no integer division or modulo at all.  That is
-    deliberate: on this backend a dense copy kernel carrying no ``//``/``%`` runs
-    correctly while the version that decomposed a flat row index with
-    ``row // WINDOW`` (a non-power-of-two divisor) did not, and the unroll-control
-    pass that this target depends on is known to be sensitive to exactly these
-    constructs.
-    """
-    request = tl.program_id(0)
-    layer = tl.program_id(1)
-    # Plain scalar loads.  A one-element ``tl.arange(0, 1)`` block was tried here
-    # and made the kernel fault with an illegal memory access, so the slot and
-    # step are loaded exactly the way the first two-pass version loaded them.
-    slot = tl.load(dst_idx_ptr + request).to(tl.int32)
-    step = tl.load(step_idx_ptr + request).to(tl.int32)
+    # Reverse mapping, resolved in-kernel: the highest-index valid request that
+    # targets this slot.  ``REQUESTS`` is the request count, not a block size.
+    source = -1
+    step = 0
+    for i in range(REQUESTS):
+        target = tl.load(dst_idx_ptr + i)
+        candidate = tl.load(step_idx_ptr + i)
+        match = (target == slot) & (candidate >= 0)
+        source = tl.where(match, i, source)
+        step = tl.where(match, candidate, step)
+    hit = source >= 0
 
-    # The invalid request is skipped by a scalar branch.  The earlier revision put
-    # this test inside the store mask as ``... & (step >= 0)`` and the whole
-    # scatter then had no effect at all, which is what a 0-d value broadcast
-    # against a block mask looks like when it goes wrong on this backend.  Keeping
-    # the mask purely block-shaped removes that possibility.
-    if step >= 0:
-        dim_index = tl.arange(0, DIM_BLOCK)[:, None]
-        window_index = tl.arange(0, WINDOW_BLOCK)[None, :]
-        mask = (dim_index < DIM) & (window_index < WINDOW)
+    row = chunk * ROW_BLOCK + tl.arange(0, ROW_BLOCK)
+    in_row = row < DIM * WINDOW
+    dim_index = row // WINDOW
+    window_index = row % WINDOW
 
-        src_offset = (
-            layer * src_s0
-            + request * src_s1
-            + step * src_s2
-            + dim_index * src_s3
-            + window_index * src_s4
-        )
-        gathered = tl.load(src_ptr + src_offset, mask=mask, other=0.0)
+    dst_offset = (
+        layer * dst_s0 + slot * dst_s1 + dim_index * dst_s2 + window_index * dst_s3
+    )
+    # Slots that resolve to a request overwrite their destination value, so
+    # reading it first would be a dead load.  Dropping it removes the
+    # `requests / cache` share of the destination read stream.
+    value = tl.load(dst_ptr + dst_offset, mask=in_row & (~hit), other=0.0)
 
-        out_offset = (
-            layer * out_s0
-            + slot * out_s1
-            + dim_index * out_s2
-            + window_index * out_s3
-        )
-        tl.store(out_ptr + out_offset, gathered, mask=mask)
+    src_offset = (
+        layer * src_s0
+        + source * src_s1
+        + step * src_s2
+        + dim_index * src_s3
+        + window_index * src_s4
+    )
+    gathered = tl.load(src_ptr + src_offset, mask=in_row & hit, other=0.0)
+    value = tl.where(hit, gathered, value)
+
+    out_offset = (
+        layer * out_s0 + slot * out_s1 + dim_index * out_s2 + window_index * out_s3
+    )
+    tl.store(out_ptr + out_offset, value, mask=in_row)
 
 
 def conv_window_scatter_with_mask(dst, src, dst_indices_raw, step_indices_raw):
-    """Copy the destination, then scatter every valid request into it."""
+    """Masked gather-scatter over an overlapping conv-window view, one launch.
+
+    The schedule is the measured best one (one program per (layer, slot,
+    row-chunk), reverse lookup by scanning the request table): a 54x smaller
+    grid measured 3-4x *slower* on T4, because each program then carries tens of
+    thousands of elements and the device runs out of parallelism.
+
+    What the launch passes: five pointers plus the thirteen real strides of
+    ``dst``/``src``/``out`` and six shape-derived constants, all as
+    ``tl.constexpr``.  Triton keys its compiled-kernel cache on those constants,
+    so a new stride layout costs one compilation and every later call with the
+    same layout reuses it -- without this module holding any state of its own,
+    which a cached plan would require and which the platform forbids.
+    """
     layers, cache, dim, window = dst.shape
     requests = dst_indices_raw.shape[0]
+    row_length = dim * window
+    row_block = min(triton.next_power_of_2(max(row_length, 1)), _ROW_CAP)
+    chunks = triton.cdiv(row_length, row_block)
     out = torch.empty_like(dst)
 
-    total = out.numel()
-    _copy_kernel[(triton.cdiv(total, _COPY_BLOCK),)](
+    _conv_window_scatter_kernel[(layers * cache * chunks,)](
         dst,
+        src,
+        dst_indices_raw,
+        step_indices_raw,
         out,
-        total,
         dst.stride(0),
         dst.stride(1),
         dst.stride(2),
         dst.stride(3),
+        src.stride(0),
+        src.stride(1),
+        src.stride(2),
+        src.stride(3),
+        src.stride(4),
+        out.stride(0),
+        out.stride(1),
+        out.stride(2),
+        out.stride(3),
         cache,
         dim,
         window,
-        int(dst.is_contiguous()),
-        _COPY_BLOCK,
+        chunks,
+        row_block,
+        requests,
     )
-
-    if requests:
-        _scatter_kernel[(requests, layers)](
-            src,
-            dst_indices_raw,
-            step_indices_raw,
-            out,
-            src.stride(0),
-            src.stride(1),
-            src.stride(2),
-            src.stride(3),
-            src.stride(4),
-            out.stride(0),
-            out.stride(1),
-            out.stride(2),
-            out.stride(3),
-            dim,
-            window,
-            triton.next_power_of_2(dim),
-            triton.next_power_of_2(window),
-        )
     return out
