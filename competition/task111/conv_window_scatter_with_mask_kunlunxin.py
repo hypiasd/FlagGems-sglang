@@ -133,14 +133,15 @@ def _scatter_kernel(
     correctly while the version that decomposed a flat row index with
     ``row // WINDOW`` (a non-power-of-two divisor) did not, and the unroll-control
     pass that this target depends on is known to be sensitive to exactly these
-    constructs.  The slot and step come back as one-element blocks rather than
-    0-d scalars so that every value here is a block value.
+    constructs.
     """
     request = tl.program_id(0)
     layer = tl.program_id(1)
-    one = tl.arange(0, 1)
-    slot = tl.load(dst_idx_ptr + request + one).to(tl.int32)
-    step = tl.load(step_idx_ptr + request + one).to(tl.int32)
+    # Plain scalar loads.  A one-element ``tl.arange(0, 1)`` block was tried here
+    # and made the kernel fault with an illegal memory access, so the slot and
+    # step are loaded exactly the way the first two-pass version loaded them.
+    slot = tl.load(dst_idx_ptr + request).to(tl.int32)
+    step = tl.load(step_idx_ptr + request).to(tl.int32)
     # An invalid request is masked out, never branched on.
     valid = step >= 0
 
