@@ -142,29 +142,33 @@ def _scatter_kernel(
     # step are loaded exactly the way the first two-pass version loaded them.
     slot = tl.load(dst_idx_ptr + request).to(tl.int32)
     step = tl.load(step_idx_ptr + request).to(tl.int32)
-    # An invalid request is masked out, never branched on.
-    valid = step >= 0
 
-    dim_index = tl.arange(0, DIM_BLOCK)[:, None]
-    window_index = tl.arange(0, WINDOW_BLOCK)[None, :]
-    mask = (dim_index < DIM) & (window_index < WINDOW) & valid
+    # The invalid request is skipped by a scalar branch.  The earlier revision put
+    # this test inside the store mask as ``... & (step >= 0)`` and the whole
+    # scatter then had no effect at all, which is what a 0-d value broadcast
+    # against a block mask looks like when it goes wrong on this backend.  Keeping
+    # the mask purely block-shaped removes that possibility.
+    if step >= 0:
+        dim_index = tl.arange(0, DIM_BLOCK)[:, None]
+        window_index = tl.arange(0, WINDOW_BLOCK)[None, :]
+        mask = (dim_index < DIM) & (window_index < WINDOW)
 
-    src_offset = (
-        layer * src_s0
-        + request * src_s1
-        + step * src_s2
-        + dim_index * src_s3
-        + window_index * src_s4
-    )
-    gathered = tl.load(src_ptr + src_offset, mask=mask, other=0.0)
+        src_offset = (
+            layer * src_s0
+            + request * src_s1
+            + step * src_s2
+            + dim_index * src_s3
+            + window_index * src_s4
+        )
+        gathered = tl.load(src_ptr + src_offset, mask=mask, other=0.0)
 
-    out_offset = (
-        layer * out_s0
-        + slot * out_s1
-        + dim_index * out_s2
-        + window_index * out_s3
-    )
-    tl.store(out_ptr + out_offset, gathered, mask=mask)
+        out_offset = (
+            layer * out_s0
+            + slot * out_s1
+            + dim_index * out_s2
+            + window_index * out_s3
+        )
+        tl.store(out_ptr + out_offset, gathered, mask=mask)
 
 
 def conv_window_scatter_with_mask(dst, src, dst_indices_raw, step_indices_raw):
